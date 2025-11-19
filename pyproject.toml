@@ -1,0 +1,21 @@
+[project]
+name = "ocamler-grpo"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "datasets>=4.4.1",
+    "openai>=1.51.0",
+    "pandas>=2.3.3",
+    "ruff>=0.14.5",
+    "requests>=2.32.3",
+    "trl>=0.25.1",
+    "peft>=0.18.0",
+]
+
+[tool.ruff]
+line-length = 100
+
+[tool.pycodestyle]
+max-line-length = 100
