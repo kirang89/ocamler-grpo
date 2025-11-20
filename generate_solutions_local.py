@@ -13,7 +13,7 @@ import requests
 SYSTEM_PROMPT = "Respond only with runnable OCaml code (no prose)."
 
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434/api/generate")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:1.5b")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "ocaml-grpo:latest")
 GENERATED_DIR = Path("generated_ocaml")
 
 PROMPT_TEMPLATE = textwrap.dedent(
@@ -356,7 +356,7 @@ def write_metrics(
 
 
 if __name__ == "__main__":
-    input_file = "problems.csv"
+    input_file = "problems.ocaml.csv"
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_file = f"output_{timestamp}.csv"
     process_csv(input_file, output_file)

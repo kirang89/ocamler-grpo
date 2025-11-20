@@ -1,3 +1,5 @@
+"""GRPO + LoRA trainer for OCaml problem solving with OCaml-grounded rewards."""
+
 import csv
 import os
 import re
@@ -9,8 +11,8 @@ from typing import Callable, Dict, List, Tuple
 
 from datasets import Dataset
 from peft import LoraConfig, TaskType
-from trl import GRPOConfig, GRPOTrainer
 from transformers import AutoTokenizer
+from trl import GRPOConfig, GRPOTrainer
 
 PROMPT_TEMPLATE = textwrap.dedent(
     """
@@ -31,81 +33,6 @@ CODE_BLOCK_RE = re.compile(r"```(.*?)```", re.DOTALL)
 LANGUAGE_HINTS = {"ocaml", "ml", "code", "language", "language:ocaml"}
 
 
-def read_problems(csv_path: str) -> List[Dict[str, str]]:
-    with open(csv_path, "r", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        return list(reader)
-
-
-def build_training_dataset(csv_path: str) -> Dataset:
-    rows = read_problems(csv_path)
-    dataset_rows = []
-    for row in rows:
-        problem_id = row["id"]
-        question = row["question"]
-        prompt = PROMPT_TEMPLATE.format(problem_id=problem_id, question=question)
-        dataset_rows.append({"prompt": prompt, "problem_id": problem_id, "question": question})
-    if not dataset_rows:
-        raise ValueError(f"No rows found in {csv_path}")
-    return Dataset.from_list(dataset_rows)
-
-
-def create_tokenizer(model_id: str):
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    tokenizer.padding_side = "left"
-    return tokenizer
-
-
-def run_subprocess(cmd: List[str], workdir: Path) -> Tuple[bool, str]:
-    try:
-        proc = subprocess.run(
-            cmd,
-            cwd=workdir,
-            capture_output=True,
-            text=True,
-        )
-    except FileNotFoundError as exc:
-        return False, f"{cmd[0]} command not found: {exc}"
-
-    output = ""
-    if proc.stdout:
-        output += proc.stdout
-    if proc.stderr:
-        output += proc.stderr
-    return proc.returncode == 0, output.strip()
-
-
-def run_type_check(source_path: Path) -> Tuple[bool, str]:
-    return run_subprocess(["ocamlc", "-c", source_path.name], source_path.parent)
-
-
-def compile_program(source_path: Path, output_name: str) -> Tuple[bool, str]:
-    return run_subprocess(["ocamlc", "-o", output_name, source_path.name], source_path.parent)
-
-
-def run_tests(executable_path: Path) -> Tuple[bool, str]:
-    return run_subprocess([f"./{executable_path.name}"], executable_path.parent)
-
-
-def extract_code_block(text: str) -> str:
-    matches = CODE_BLOCK_RE.findall(text.strip())
-    if matches:
-        for block in matches:
-            block = block.strip()
-            if not block:
-                continue
-            if "\n" in block:
-                first_line, rest = block.split("\n", 1)
-                if first_line.strip().lower() in LANGUAGE_HINTS:
-                    return rest.strip()
-            if block.lower() in LANGUAGE_HINTS:
-                continue
-            return block.strip()
-    return text.strip()
-
-
 class RewardEvaluator:
     """Caches OCaml compilation results for completions."""
 
@@ -113,6 +40,7 @@ class RewardEvaluator:
         self._cache: Dict[Tuple[str, str], Dict[str, bool]] = {}
 
     def evaluate(self, problem_id: str, completion: str) -> Dict[str, bool]:
+        """Compile and run a completion, returning booleans for downstream reward fns."""
         code = extract_code_block(completion)
         cache_key = (problem_id, code)
         if cache_key in self._cache:
@@ -144,7 +72,92 @@ class RewardEvaluator:
         return result
 
 
+def read_problems(csv_path: str) -> List[Dict[str, str]]:
+    """Return rows from the curated OCaml problem CSV."""
+    with open(csv_path, "r", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        return list(reader)
+
+
+def build_training_dataset(csv_path: str) -> Dataset:
+    """Wrap the CSV in a Hugging Face Dataset containing prompts per problem."""
+    rows = read_problems(csv_path)
+    dataset_rows = []
+    for row in rows:
+        problem_id = row["id"]
+        question = row["question"]
+        prompt = PROMPT_TEMPLATE.format(problem_id=problem_id, question=question)
+        dataset_rows.append({"prompt": prompt, "problem_id": problem_id, "question": question})
+    if not dataset_rows:
+        raise ValueError(f"No rows found in {csv_path}")
+    return Dataset.from_list(dataset_rows)
+
+
+def create_tokenizer(model_id: str):
+    """Load a tokenizer configured for GRPO generation."""
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "left"
+    return tokenizer
+
+
+def run_subprocess(cmd: List[str], workdir: Path) -> Tuple[bool, str]:
+    """Execute an OCaml tool and return success plus logs for debugging rewards."""
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=workdir,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError as exc:
+        return False, f"{cmd[0]} command not found: {exc}"
+
+    output = ""
+    if proc.stdout:
+        output += proc.stdout
+    if proc.stderr:
+        output += proc.stderr
+    return proc.returncode == 0, output.strip()
+
+
+def run_type_check(source_path: Path) -> Tuple[bool, str]:
+    """Use ocamlc -c to catch syntax/type errors before linking."""
+    return run_subprocess(["ocamlc", "-c", source_path.name], source_path.parent)
+
+
+def compile_program(source_path: Path, output_name: str) -> Tuple[bool, str]:
+    """Produce an executable so tests can run when type checking succeeds."""
+    return run_subprocess(["ocamlc", "-o", output_name, source_path.name], source_path.parent)
+
+
+def run_tests(executable_path: Path) -> Tuple[bool, str]:
+    """Run the generated binary which should self-test the candidate solution."""
+    return run_subprocess([f"./{executable_path.name}"], executable_path.parent)
+
+
+def extract_code_block(text: str) -> str:
+    """Strip markdown fences so only runnable OCaml reaches the evaluator."""
+    matches = CODE_BLOCK_RE.findall(text.strip())
+    if matches:
+        for block in matches:
+            block = block.strip()
+            if not block:
+                continue
+            if "\n" in block:
+                first_line, rest = block.split("\n", 1)
+                if first_line.strip().lower() in LANGUAGE_HINTS:
+                    return rest.strip()
+            if block.lower() in LANGUAGE_HINTS:
+                continue
+            return block.strip()
+    return text.strip()
+
+
 def make_reward_function(metric_key: str, evaluator: RewardEvaluator) -> Callable:
+    """Generate a GRPO reward callback bound to a specific evaluator metric."""
+
     def reward_func(
         prompts: List[str],
         completions: List[str],
@@ -165,6 +178,7 @@ def make_reward_function(metric_key: str, evaluator: RewardEvaluator) -> Callabl
 
 
 def build_reward_functions(evaluator: RewardEvaluator) -> List[Callable]:
+    """Expose separate reward streams for type check, compile, and end-to-end tests."""
     return [
         make_reward_function("type_check", evaluator),
         make_reward_function("compile", evaluator),
@@ -173,14 +187,23 @@ def build_reward_functions(evaluator: RewardEvaluator) -> List[Callable]:
 
 
 def create_grpo_config() -> GRPOConfig:
-    per_device_batch = int(os.environ.get("GRPO_BATCH_SIZE", "1"))
+    """Assemble GRPO training defaults plus any overrides from env vars.
+    Note: These settings have been optimized for running on a RTX 6000 48 GB VRAM.
+    """
+    # set to 4 prompts/step if VRAM allows; reduce when using larger models.
+    per_device_batch = int(os.environ.get("GRPO_BATCH_SIZE", "4"))
+    # Leave at 1 with batch 4; raise to 2-4 only when you must drop batch size.
     grad_steps = int(os.environ.get("GRPO_GRAD_ACCUM_STEPS", "1"))
-    num_generations = int(os.environ.get("GRPO_NUM_GENERATIONS", "2"))
-    max_prompt = int(os.environ.get("GRPO_MAX_PROMPT", "256"))
-    max_completion = int(os.environ.get("GRPO_MAX_COMPLETION", "256"))
+    # Target 4 completions/prompt for the RTX box—turn this up until you near 44 GB VRAM.
+    num_generations = int(os.environ.get("GRPO_NUM_GENERATIONS", "4"))
+    # Increase to ~512 tokens on the RTX rig to capture full OCaml problems.
+    max_prompt = int(os.environ.get("GRPO_MAX_PROMPT", "512"))
+    # Mirror completions at ~512 tokens so solutions + harnesses fit.
+    max_completion = int(os.environ.get("GRPO_MAX_COMPLETION", "512"))
+    # Stick with 1-2 passes; GRPO overfits small OCaml sets quickly.
     num_epochs = float(os.environ.get("GRPO_NUM_EPOCHS", "1"))
+    # 5e-6 trains safely; bump toward 8e-6 only if the run is stable.
     learning_rate = float(os.environ.get("GRPO_LEARNING_RATE", "5e-6"))
-
     generation_batch_size = int(
         os.environ.get("GRPO_GENERATION_BATCH_SIZE", str(per_device_batch * num_generations))
     )
@@ -196,20 +219,27 @@ def create_grpo_config() -> GRPOConfig:
         remove_unused_columns=False,
         num_train_epochs=num_epochs,
         learning_rate=learning_rate,
+        # Keep it 1 or 2 – frequent logging helps spot reward collapse; the overhead is tiny.
         logging_steps=int(os.environ.get("GRPO_LOGGING_STEPS", "1")),
     )
 
 
 def create_lora_config() -> LoraConfig:
     """Build a LoraConfig using optional env overrides."""
+    # Rank 16 keeps VRAM in check; double it only if you need more adapter capacity.
     lora_r = int(os.environ.get("LORA_R", "16"))
+    # Alpha 32 pairs well with r=16; scale roughly 2x the rank when you change it.
     lora_alpha = int(os.environ.get("LORA_ALPHA", "32"))
+    # Small dropout (5%) stabilizes GRPO; set to 0 if you notice underfitting.
     lora_dropout = float(os.environ.get("LORA_DROPOUT", "0.05"))
+    # Bias "none" avoids extra params; use "lora_only" when the base model expects it.
     bias = os.environ.get("LORA_BIAS", "none")
+    # Cover attention (q/k/v/o) plus MLP (gate/up/down) blocks for coder backbones.
     raw_target_modules = os.environ.get(
         "LORA_TARGET_MODULES",
         "q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj",
     )
+
     target_modules = [module.strip() for module in raw_target_modules.split(",") if module.strip()]
 
     return LoraConfig(
@@ -238,6 +268,7 @@ def resolve_model_id() -> str:
 
 
 def main():
+    """Tie tokenizer/model selection, dataset prep, rewards, and LoRA together."""
     model_id = resolve_model_id()
     dataset = build_training_dataset(TRAINING_PROBLEMS_FILE)
     tokenizer = create_tokenizer(model_id)

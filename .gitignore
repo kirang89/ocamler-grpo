@@ -8,3 +8,11 @@ wheels/
 
 # Virtual environments
 .venv
+
+# OSX
+.DS_Store
+
+# Project-specific
+MODELFILE
+*.gguf
+metrics.csv
