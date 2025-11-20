@@ -1,6 +1,7 @@
 """GRPO + LoRA trainer for OCaml problem solving with OCaml-grounded rewards."""
 
 import csv
+import json
 import os
 import re
 import subprocess
@@ -32,6 +33,10 @@ GRPO_OUTPUT_DIR = os.environ.get("GRPO_OUTPUT_DIR", "grpo_runs")
 
 CODE_BLOCK_RE = re.compile(r"```(.*?)```", re.DOTALL)
 LANGUAGE_HINTS = {"ocaml", "ml", "code", "language", "language:ocaml"}
+FUNCTION_DEF_RE = re.compile(r"\blet\s+[a-zA-Z0-9_']+\s*(?:\([^)]*\))?\s*=", re.MULTILINE)
+ENTRYPOINT_HINTS = ("let () =", "let main", "let%test", "let [%test")
+END_MARKER = "(* END *)"
+MIN_NON_EMPTY_LINES = 8
 
 
 class RewardEvaluator:
@@ -71,6 +76,83 @@ class RewardEvaluator:
         result = {"type_check": type_ok, "compile": compile_ok, "tests": test_ok}
         self._cache[cache_key] = result
         return result
+
+
+def count_non_empty_code_lines(completion: str) -> int:
+    """Return non-empty, non-comment OCaml line count for heuristics."""
+    code = extract_code_block(completion)
+    count = 0
+    for line in code.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("(*"):
+            continue
+        count += 1
+    return count
+
+
+def score_non_empty(completion: str) -> float:
+    return 1.0 if count_non_empty_code_lines(completion) >= MIN_NON_EMPTY_LINES else 0.0
+
+
+def score_has_function_definition(completion: str) -> float:
+    code = extract_code_block(completion)
+    return 1.0 if FUNCTION_DEF_RE.search(code) else 0.0
+
+
+def score_has_test_harness(completion: str) -> float:
+    code = extract_code_block(completion).lower()
+    has_entry = any(hint in code for hint in ENTRYPOINT_HINTS)
+    has_assert = "assert" in code
+    return 1.0 if has_entry and has_assert else 0.0
+
+
+def score_has_end_marker(completion: str) -> float:
+    return 1.0 if completion.strip().endswith(END_MARKER) else 0.0
+
+
+STRUCTURAL_REWARD_SPECS = [
+    ("structure_non_empty", score_non_empty),
+    ("structure_function", score_has_function_definition),
+    ("structure_harness", score_has_test_harness),
+    ("structure_end_marker", score_has_end_marker),
+]
+
+
+class RewardLogger:
+    """Writes reward outcomes to JSONL for offline inspection."""
+
+    def __init__(self, base_dir: Path) -> None:
+        self.base_dir = base_dir
+        self.base_dir.mkdir(parents=True, exist_ok=True)
+
+    def log(self, reward_name: str, entries: List[Dict[str, str]]) -> None:
+        path = self.base_dir / f"{reward_name}.jsonl"
+        with path.open("a", encoding="utf-8") as handle:
+            for entry in entries:
+                handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def log_reward_entries(
+    logger: RewardLogger | None,
+    reward_name: str,
+    ids: List[str],
+    completions: List[str],
+    rewards: List[float],
+) -> None:
+    if logger is None:
+        return
+    entries: List[Dict[str, str]] = []
+    for idx, reward in enumerate(rewards):
+        completion = completions[idx] if idx < len(completions) else ""
+        pid = ids[idx] if idx < len(ids) else f"sample_{idx}"
+        entries.append(
+            {
+                "problem_id": pid,
+                "reward": reward,
+                "preview": completion[:200],
+            }
+        )
+    logger.log(reward_name, entries)
 
 
 def read_problems(csv_path: str) -> List[Dict[str, str]]:
@@ -156,7 +238,30 @@ def extract_code_block(text: str) -> str:
     return text.strip()
 
 
-def make_reward_function(metric_key: str, evaluator: RewardEvaluator) -> Callable:
+def make_structural_reward(
+    reward_name: str, scorer: Callable[[str], float], logger: RewardLogger | None
+) -> Callable:
+    """Wrap simple completion-scoring heuristics into GRPO reward callbacks."""
+
+    def reward_func(
+        prompts: List[str],
+        completions: List[str],
+        completion_ids=None,
+        problem_id: List[str] | None = None,
+        **kwargs,
+    ) -> List[float]:
+        ids = problem_id or kwargs.get("problem_id") or []
+        rewards = [float(scorer(completion)) for completion in completions]
+        log_reward_entries(logger, reward_name, ids, completions, rewards)
+        return rewards
+
+    reward_func.__name__ = f"{reward_name}_reward"
+    return reward_func
+
+
+def make_reward_function(
+    metric_key: str, evaluator: RewardEvaluator, logger: RewardLogger | None
+) -> Callable:
     """Generate a GRPO reward callback bound to a specific evaluator metric."""
 
     def reward_func(
@@ -172,19 +277,26 @@ def make_reward_function(metric_key: str, evaluator: RewardEvaluator) -> Callabl
             pid = ids[idx] if idx < len(ids) else f"sample_{idx}"
             result = evaluator.evaluate(pid, completion)
             rewards.append(1.0 if result.get(metric_key, False) else 0.0)
+        log_reward_entries(logger, metric_key, ids, completions, rewards)
         return rewards
 
     reward_func.__name__ = f"{metric_key}_reward"
     return reward_func
 
 
-def build_reward_functions(evaluator: RewardEvaluator) -> List[Callable]:
-    """Expose separate reward streams for type check, compile, and end-to-end tests."""
-    return [
-        make_reward_function("type_check", evaluator),
-        make_reward_function("compile", evaluator),
-        make_reward_function("tests", evaluator),
+def build_reward_functions(
+    evaluator: RewardEvaluator, logger: RewardLogger | None
+) -> List[Callable]:
+    """Expose separate reward streams for heuristics plus OCaml-grounded rewards."""
+    structural_rewards = [
+        make_structural_reward(name, scorer, logger) for name, scorer in STRUCTURAL_REWARD_SPECS
     ]
+    ocaml_rewards = [
+        make_reward_function("type_check", evaluator, logger),
+        make_reward_function("compile", evaluator, logger),
+        make_reward_function("tests", evaluator, logger),
+    ]
+    return structural_rewards + ocaml_rewards
 
 
 def create_grpo_config() -> GRPOConfig:
@@ -276,7 +388,10 @@ def main():
     dataset = build_training_dataset(TRAINING_PROBLEMS_FILE)
     tokenizer = create_tokenizer(model_id)
     evaluator = RewardEvaluator()
-    reward_funcs = build_reward_functions(evaluator)
+    output_path = Path(GRPO_OUTPUT_DIR)
+    output_path.mkdir(parents=True, exist_ok=True)
+    reward_logger = RewardLogger(output_path / "reward_logs")
+    reward_funcs = build_reward_functions(evaluator, reward_logger)
     config = create_grpo_config()
     lora_config = create_lora_config()
 
