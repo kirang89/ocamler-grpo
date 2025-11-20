@@ -17,8 +17,9 @@ from trl import GRPOConfig, GRPOTrainer
 PROMPT_TEMPLATE = textwrap.dedent(
     """
     You are an expert OCaml engineer. Read the programming problem below and craft an OCaml
-    solution plus a lightweight test harness that executes when run. Do not respond with
-    any prose or text other than the code.
+    solution plus a lightweight test harness that executes when run. Output a single OCaml
+    file, keep it under ~200 lines, and end the response with the exact marker `(* END *)`.
+    Do not emit any prose, explanations, or trailing text after the marker.
 
     Problem ({problem_id}):
     {question}
