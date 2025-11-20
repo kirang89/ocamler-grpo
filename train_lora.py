@@ -99,11 +99,19 @@ def score_has_function_definition(completion: str) -> float:
     return 1.0 if FUNCTION_DEF_RE.search(code) else 0.0
 
 
-def score_has_test_harness(completion: str) -> float:
+def score_has_entrypoint(completion: str) -> float:
     code = extract_code_block(completion).lower()
     has_entry = any(hint in code for hint in ENTRYPOINT_HINTS)
-    has_assert = "assert" in code
-    return 1.0 if has_entry and has_assert else 0.0
+    return 1.0 if has_entry else 0.0
+
+
+def score_has_asserts(completion: str) -> float:
+    code = extract_code_block(completion).lower()
+    return 1.0 if "assert" in code else 0.0
+
+
+def score_harness_complete(completion: str) -> float:
+    return 1.0 if score_has_entrypoint(completion) and score_has_asserts(completion) else 0.0
 
 
 def score_has_end_marker(completion: str) -> float:
@@ -113,7 +121,9 @@ def score_has_end_marker(completion: str) -> float:
 STRUCTURAL_REWARD_SPECS = [
     ("structure_non_empty", score_non_empty),
     ("structure_function", score_has_function_definition),
-    ("structure_harness", score_has_test_harness),
+    ("structure_entrypoint", score_has_entrypoint),
+    ("structure_asserts", score_has_asserts),
+    ("structure_harness_complete", score_harness_complete),
     ("structure_end_marker", score_has_end_marker),
 ]
 
