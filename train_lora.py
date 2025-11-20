@@ -1,13 +1,14 @@
 """GRPO + LoRA trainer for OCaml problem solving with OCaml-grounded rewards."""
 
 import csv
+import logging
 import os
 import re
 import subprocess
 import tempfile
 import textwrap
 from pathlib import Path
-from typing import Callable, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Tuple
 
 from datasets import Dataset
 from peft import LoraConfig, TaskType
@@ -224,6 +225,54 @@ def create_grpo_config() -> GRPOConfig:
     )
 
 
+def enable_checkpoint_input_grads(model: Any) -> None:
+    """Make sure gradient checkpointed blocks receive grad-tracking inputs."""
+
+    # Some HF models need a manual switch flipped when gradient checkpointing
+    # runs under PEFT. Recursively search for that helper once per object.
+    visited: set[int] = set()
+
+    def _enable(target: Any) -> bool:
+        if target is None or id(target) in visited:
+            return False
+        visited.add(id(target))
+
+        success = False
+
+        enable_fn = getattr(target, "enable_input_require_grads", None)
+        if callable(enable_fn):
+            enable_fn()
+            success = True
+
+        # PEFT often wraps the base model, so walk common nesting attributes.
+        for attr in ("model", "base_model"):
+            child = getattr(target, attr, None)
+            if child is not None and child is not target and _enable(child):
+                success = True
+
+        get_embeddings = getattr(target, "get_input_embeddings", None)
+        if callable(get_embeddings):
+            embeddings = get_embeddings()
+            if embeddings is not None:
+
+                # As a last resort, force the embedding output tensors to keep grad.
+                def _force_requires_grad(_, __, output):
+                    if isinstance(output, tuple):
+                        output = output[0]
+                    if hasattr(output, "requires_grad_"):
+                        output.requires_grad_(True)
+
+                embeddings.register_forward_hook(_force_requires_grad)
+                success = True
+
+        return success
+
+    if not _enable(model):
+        logging.getLogger(__name__).warning(
+            "Could not enable gradient-tracking inputs; checkpointing may still warn."
+        )
+
+
 def create_lora_config() -> LoraConfig:
     """Build a LoraConfig using optional env overrides."""
     # Rank 16 keeps VRAM in check; double it only if you need more adapter capacity.
@@ -285,6 +334,7 @@ def main():
         processing_class=tokenizer,
         peft_config=lora_config,
     )
+    enable_checkpoint_input_grads(trainer.model)
     trainer.train()
     trainer.save_model(GRPO_OUTPUT_DIR)
     tokenizer.save_pretrained(GRPO_OUTPUT_DIR)
