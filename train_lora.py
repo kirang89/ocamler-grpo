@@ -12,7 +12,7 @@ from typing import Any, Callable, Dict, List, Tuple
 
 from datasets import Dataset
 from peft import LoraConfig, TaskType
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, TrainerCallback
 from trl import GRPOConfig, GRPOTrainer
 
 PROMPT_TEMPLATE = textwrap.dedent(
@@ -228,11 +228,12 @@ def create_grpo_config() -> GRPOConfig:
 def enable_checkpoint_input_grads(model: Any) -> None:
     """Make sure gradient checkpointed blocks receive grad-tracking inputs."""
 
-    # Some HF models need a manual switch flipped when gradient checkpointing
-    # runs under PEFT. Recursively search for that helper once per object.
+    logger = logging.getLogger(__name__)
     visited: set[int] = set()
+    embed_hook_fired = False
 
     def _enable(target: Any) -> bool:
+        nonlocal embed_hook_fired
         if target is None or id(target) in visited:
             return False
         visited.add(id(target))
@@ -242,9 +243,9 @@ def enable_checkpoint_input_grads(model: Any) -> None:
         enable_fn = getattr(target, "enable_input_require_grads", None)
         if callable(enable_fn):
             enable_fn()
+            logger.debug("enable_input_require_grads() called on %s", type(target).__name__)
             success = True
 
-        # PEFT often wraps the base model, so walk common nesting attributes.
         for attr in ("model", "base_model"):
             child = getattr(target, attr, None)
             if child is not None and child is not target and _enable(child):
@@ -255,22 +256,48 @@ def enable_checkpoint_input_grads(model: Any) -> None:
             embeddings = get_embeddings()
             if embeddings is not None:
 
-                # As a last resort, force the embedding output tensors to keep grad.
                 def _force_requires_grad(_, __, output):
-                    if isinstance(output, tuple):
-                        output = output[0]
-                    if hasattr(output, "requires_grad_"):
-                        output.requires_grad_(True)
+                    nonlocal embed_hook_fired
+                    tensor = output[0] if isinstance(output, tuple) else output
+                    if hasattr(tensor, "requires_grad"):
+                        if not tensor.requires_grad:
+                            try:
+                                tensor.requires_grad_(True)
+                            except RuntimeError:
+                                logger.warning(
+                                    "Failed to set requires_grad on %s output", type(embeddings).__name__
+                                )
+                            else:
+                                if not embed_hook_fired:
+                                    logger.info(
+                                        "Embedding outputs now require grad to satisfy checkpoint inputs."
+                                    )
+                                embed_hook_fired = True
 
                 embeddings.register_forward_hook(_force_requires_grad)
+                logger.debug("Registered embedding hook on %s", type(embeddings).__name__)
                 success = True
 
         return success
 
     if not _enable(model):
-        logging.getLogger(__name__).warning(
-            "Could not enable gradient-tracking inputs; checkpointing may still warn."
-        )
+        logger.warning("Could not enable gradient-tracking inputs; checkpointing may still warn.")
+
+
+class RequireGradCallback(TrainerCallback):
+    """Reapply checkpoint fixes once Accelerate wraps the model."""
+
+    def __init__(self) -> None:
+        self._armed = True
+
+    def on_train_begin(self, args, state, control, **kwargs):
+        if not self._armed:
+            return control
+        model = kwargs.get("model")
+        if model is not None:
+            enable_checkpoint_input_grads(model)
+            self._armed = False
+        return control
 
 
 def create_lora_config() -> LoraConfig:
@@ -335,6 +362,7 @@ def main():
         peft_config=lora_config,
     )
     enable_checkpoint_input_grads(trainer.model)
+    trainer.add_callback(RequireGradCallback())
     trainer.train()
     trainer.save_model(GRPO_OUTPUT_DIR)
     tokenizer.save_pretrained(GRPO_OUTPUT_DIR)
