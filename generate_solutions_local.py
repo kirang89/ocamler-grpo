@@ -13,7 +13,7 @@ import requests
 
 SYSTEM_PROMPT = "Respond only with runnable OCaml code (no prose)."
 
-OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434/api/generate")
+OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:8080/v1/chat/completions")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:1.5b-instruct-fp16")
 GENERATED_DIR = Path("generated_ocaml")
 
@@ -30,17 +30,41 @@ PROMPT_TEMPLATE = textwrap.dedent(
 
 
 def call_ollama(prompt: str) -> str:
-    payload = {
-        "model": OLLAMA_MODEL,
-        "prompt": prompt,
-        "system": SYSTEM_PROMPT,
-        "stream": False,
-    }
+    url_lower = OLLAMA_URL.lower()
+    use_chat_schema = "/chat/completions" in url_lower or os.environ.get(
+        "OLLAMA_USE_CHAT", ""
+    ).lower() in {"1", "true", "yes"}
+
+    if use_chat_schema:
+        payload = {
+            "model": OLLAMA_MODEL,
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            "stream": False,
+        }
+    else:
+        payload = {
+            "model": OLLAMA_MODEL,
+            "prompt": prompt,
+            "system": SYSTEM_PROMPT,
+            "stream": False,
+        }
     response = requests.post(OLLAMA_URL, json=payload, timeout=300)
     response.raise_for_status()
     data = response.json()
+    if use_chat_schema:
+        choices = data.get("choices")
+        if not choices:
+            raise ValueError("Unexpected response: missing 'choices'")
+        message = choices[0].get("message")
+        if not message or "content" not in message:
+            raise ValueError("Unexpected response: missing 'message.content'")
+        return message["content"].strip()
+
     if "response" not in data:
-        raise ValueError("Unexpected response from Ollama: missing 'response'")
+        raise ValueError("Unexpected response: missing 'response'")
     return data["response"].strip()
 
 
