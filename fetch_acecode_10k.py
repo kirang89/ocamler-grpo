@@ -16,10 +16,12 @@ SPLIT = "train"
 FIELDNAMES = ["id", "question"]
 
 
-def iter_rows(limit: int) -> Iterable[Mapping[str, str]]:
+def iter_rows(limit: int, offset: int = 0) -> Iterable[Mapping[str, str]]:
     """Stream rows from the dataset without downloading the full corpus."""
     dataset = load_dataset(DATASET_ID, split=SPLIT, streaming=True)
-    return islice(dataset, limit)
+    start = max(offset, 0)
+    stop = start + limit if limit is not None else None
+    return islice(dataset, start, stop)
 
 
 def extract_question(row: Mapping[str, str]) -> str:
@@ -59,6 +61,12 @@ def parse_args() -> argparse.Namespace:
         help="number of rows to fetch (default: 10000)",
     )
     parser.add_argument(
+        "--offset",
+        type=int,
+        default=0,
+        help="number of initial rows to skip before streaming (default: 0)",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         default=Path("problems10k.csv"),
@@ -71,10 +79,16 @@ def main() -> None:
     args = parse_args()
     if args.rows <= 0:
         raise SystemExit("rows must be a positive integer")
+    if args.rows <= 0:
+        raise SystemExit("rows must be a positive integer")
+    if args.offset < 0:
+        raise SystemExit("offset must be zero or positive")
+    start = args.offset
+    end = args.offset + args.rows
     print(
-        f"Fetching first {args.rows:,} rows from {DATASET_ID} ({SPLIT} split) into {args.output}"
+        f"Fetching rows [{start:,}, {end:,}) from {DATASET_ID} ({SPLIT} split) into {args.output}"
     )
-    rows = iter_rows(args.rows)
+    rows = iter_rows(args.rows, offset=args.offset)
     export_rows(rows, args.output)
 
 

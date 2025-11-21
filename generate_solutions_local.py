@@ -4,16 +4,17 @@ import re
 import subprocess
 import tempfile
 import textwrap
+import time
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import requests
 
 SYSTEM_PROMPT = "Respond only with runnable OCaml code (no prose)."
 
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434/api/generate")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "ocaml-grpo:latest")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:1.5b-instruct-fp16")
 GENERATED_DIR = Path("generated_ocaml")
 
 PROMPT_TEMPLATE = textwrap.dedent(
@@ -201,7 +202,7 @@ def log_evaluation(problem_id: str, evaluation: Dict[str, Tuple[bool, str]]) -> 
                 print(f"      {line}")
 
 
-def process_csv(input_file: str, output_file: str):
+def process_csv(input_file: str, output_file: str, run_id: Optional[str] = None):
     problems = []
 
     with open(input_file, "r", encoding="utf-8") as f:
@@ -210,6 +211,11 @@ def process_csv(input_file: str, output_file: str):
 
     results = []
     run_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    run_identifier = run_id or datetime.now().strftime("%Y%m%d_%H%M%S")
+    matrix_path = Path(f"matrix_{run_identifier}.csv")
+    log_path = Path(f"logs_{run_identifier}.txt")
+    log_entries: List[str] = []
+    matrix_rows: List[Dict[str, str]] = []
     for i, problem in enumerate(problems):
         problem_id = problem["id"]
         question = problem["question"]
@@ -217,8 +223,11 @@ def process_csv(input_file: str, output_file: str):
         print(f"Processing {problem_id} ({i + 1}/{len(problems)})...")
 
         solution_error = None
+        generation_seconds = 0.0
         try:
+            start_time = time.perf_counter()
             solution = generate_solution_code(question, problem_id)
+            generation_seconds = time.perf_counter() - start_time
         except Exception as exc:
             print(f"✗ Error processing {problem_id}: {exc}")
             solution = f"ERROR: {exc}"
@@ -265,6 +274,30 @@ def process_csv(input_file: str, output_file: str):
                 "timestamp": run_timestamp,
             }
         )
+        matrix_rows.append(
+            {
+                "problem_id": problem_id,
+                "type_check_pass": "1" if type_check_success else "0",
+                "compile_pass": "1" if compilation_success else "0",
+                "tests_pass": "1" if test_success else "0",
+                "generation_seconds": f"{generation_seconds:.2f}",
+            }
+        )
+        log_entries.append(
+            "\n".join(
+                [
+                    "-" * 80,
+                    f"Problem: {problem_id}",
+                    f"Question: {question.strip()[:500]}",
+                    f"Solution:\n{solution}",
+                    (
+                        "Evaluation: "
+                        f"type={type_check_success} compile={compilation_success} tests={test_success} "
+                        f"generation_time={generation_seconds:.2f}s"
+                    ),
+                ]
+            )
+        )
 
     with open(output_file, "w", encoding="utf-8", newline="") as f:
         fieldnames = [
@@ -297,6 +330,10 @@ def process_csv(input_file: str, output_file: str):
     accuracy = (successes / total * 100.0) if total else 0.0
     print(f"\n✓ Results written to {output_file}")
     print(f"Accuracy: {accuracy:.2f}% ({successes}/{total})")
+    write_matrix_file(matrix_rows, matrix_path)
+    write_log_file(log_entries, log_path)
+    print(f"Matrix file: {matrix_path}")
+    print(f"Logs file: {log_path}")
 
     write_metrics(
         run_timestamp,
@@ -307,6 +344,36 @@ def process_csv(input_file: str, output_file: str):
         compilation_passes,
         test_passes,
     )
+    return {
+        "total": total,
+        "type_passes": type_passes,
+        "compilation_passes": compilation_passes,
+        "test_passes": test_passes,
+        "successes": successes,
+        "accuracy": accuracy,
+        "matrix_file": str(matrix_path),
+        "log_file": str(log_path),
+    }
+
+
+def write_matrix_file(rows: List[Dict[str, str]], path: Path) -> None:
+    fieldnames = [
+        "problem_id",
+        "type_check_pass",
+        "compile_pass",
+        "tests_pass",
+        "generation_seconds",
+    ]
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def write_log_file(entries: List[str], path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        handle.write("\n\n".join(entries))
 
 
 def write_metrics(
@@ -356,7 +423,16 @@ def write_metrics(
 
 
 if __name__ == "__main__":
-    input_file = "problems.ocaml.csv"
+    input_file = "problems1k.test.csv"
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_file = f"output_{timestamp}.csv"
-    process_csv(input_file, output_file)
+    summary = process_csv(input_file, output_file, run_id=timestamp)
+    if summary:
+        print("\n===== Run Summary =====")
+        print(f"Total problems: {summary['total']}")
+        print(f"Type check passes: {summary['type_passes']}")
+        print(f"Compilation passes: {summary['compilation_passes']}")
+        print(f"Test passes: {summary['test_passes']}")
+        print(f"Accuracy: {summary['accuracy']:.2f}% ({summary['successes']}/{summary['total']})")
+        print(f"Matrix file: {summary['matrix_file']}")
+        print(f"Logs file: {summary['log_file']}")
