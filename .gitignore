@@ -16,3 +16,6 @@ wheels/
 MODELFILE
 *.gguf
 metrics.csv
+
+# Log files
+*.log

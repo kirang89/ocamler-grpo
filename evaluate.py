@@ -28,6 +28,9 @@ PROMPT_TEMPLATE = textwrap.dedent(
     """
 ).strip()
 
+CODE_BLOCK_RE = re.compile(r"```(.*?)```", re.DOTALL)
+LANGUAGE_HINTS = {"ocaml", "ml", "code", "language", "language:ocaml"}
+
 
 def call_ollama(prompt: str) -> str:
     url_lower = OLLAMA_URL.lower()
@@ -66,10 +69,6 @@ def call_ollama(prompt: str) -> str:
     if "response" not in data:
         raise ValueError("Unexpected response: missing 'response'")
     return data["response"].strip()
-
-
-CODE_BLOCK_RE = re.compile(r"```(.*?)```", re.DOTALL)
-LANGUAGE_HINTS = {"ocaml", "ml", "code", "language", "language:ocaml"}
 
 
 def parse_response(raw_response: str) -> str:
@@ -118,17 +117,13 @@ def run_code(code: str) -> Tuple[bool, str]:
             ["ocaml", "-stdin"],
             input=code,
             text=True,
-            capture_output=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
     except FileNotFoundError as exc:
         return False, f"ocaml command not found: {exc}"
 
-    output = ""
-    if proc.stdout:
-        output += proc.stdout
-    if proc.stderr:
-        output += proc.stderr
-    return proc.returncode == 0, output.strip()
+    return proc.returncode == 0, ""
 
 
 def run_via_file(problem_id: str, code: str) -> Tuple[bool, str]:
@@ -217,13 +212,6 @@ def log_evaluation(problem_id: str, evaluation: Dict[str, Tuple[bool, str]]) -> 
         f"tests: {fmt(evaluation['tests'])}"
     )
     print(summary)
-
-    for label in ["type_check", "compile", "tests"]:
-        ok, output = evaluation[label]
-        if not ok and output:
-            print(f"    [{label} output]")
-            for line in output.splitlines():
-                print(f"      {line}")
 
 
 def process_csv(input_file: str, output_file: str, run_id: Optional[str] = None):
