@@ -290,19 +290,165 @@ def make_reward_function(
     return reward_func
 
 
+def make_syntax_aware_reward(evaluator, logger):
+    """
+    Syntax-aware reward function with graduated rewards based on error count.
+
+    Reward structure:
+    - Structural: 4% (2% asserts + 2% end marker)
+    - Type checking: 38% with graduated partial credit:
+        * 0 errors (perfect): 0.38 (100%)
+        * 1 error: 0.28 (75%)
+        * 2 errors: 0.19 (50%)
+        * 3 errors: 0.11 (30%)
+        * 4+ errors: 0.04 (10%)
+    - Compilation: 20% (only if type checks perfectly)
+    - Tests: 38% (only if compiles)
+    """
+
+    def reward_func(
+        prompts: List[str],
+        completions: List[str],
+        completion_ids=None,
+        problem_id: List[str] | None = None,
+        **kwargs,
+    ) -> List[float]:
+        ids = problem_id or kwargs.get("problem_id") or []
+        rewards = []
+        detailed_logs = []
+
+        for idx, completion in enumerate(completions):
+            pid = ids[idx] if idx < len(ids) else f"sample_{idx}"
+
+            # === STAGE 1: Structural Checks (4% total) ===
+            code = extract_code_block(completion)
+
+            structural_score = 0.0
+            if "assert" in code.lower():
+                structural_score += 0.02
+            if completion.strip().endswith(END_MARKER):
+                structural_score += 0.02
+
+            # Gate: Must have minimal code
+            if not code or count_non_empty_code_lines(completion) < MIN_NON_EMPTY_LINES:
+                rewards.append(structural_score)
+                detailed_logs.append(
+                    {
+                        "problem_id": pid,
+                        "total_reward": float(structural_score),
+                        "structural": float(structural_score),
+                        "type_check": 0.0,
+                        "compile": 0.0,
+                        "tests": 0.0,
+                        "syntax_errors": None,
+                        "failure_reason": "insufficient_code",
+                        "preview": completion[:200],
+                    }
+                )
+                continue
+
+            # === STAGE 2: Syntax-Aware Type Checking (38%) ===
+            with tempfile.TemporaryDirectory(prefix=f"{pid}_reward_") as tmpdir_str:
+                tmpdir = Path(tmpdir_str)
+                source_path = tmpdir / f"{pid}.ml"
+                source_path.write_text(f"{code.rstrip()}\n", encoding="utf-8")
+
+                # Run OCaml type checker
+                type_result = subprocess.run(
+                    ["ocamlc", "-c", source_path.name],
+                    cwd=tmpdir,
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+
+                if type_result.returncode == 0:
+                    # Perfect - no syntax errors
+                    type_score = 0.38
+                    syntax_errors = 0
+                    error_details = "success"
+                else:
+                    # Count syntax errors in stderr
+                    stderr = type_result.stderr
+                    error_count = len(re.findall(r"\bError:", stderr))
+
+                    # Graduated rewards based on error count
+                    if error_count == 0:
+                        type_score = 0.0
+                    elif error_count == 1:
+                        type_score = 0.28  # 75% credit - very close!
+                    elif error_count == 2:
+                        type_score = 0.19  # 50% credit
+                    elif error_count == 3:
+                        type_score = 0.11  # 30% credit
+                    elif error_count == 4:
+                        type_score = 0.06  # 15% credit
+                    else:
+                        type_score = 0.04  # 10% credit for trying
+
+                    syntax_errors = error_count
+                    error_details = stderr[:300]
+
+                # === STAGE 3: Compilation (20%) - only if type checks perfectly ===
+                compile_score = 0.0
+                if type_result.returncode == 0:
+                    compile_result = subprocess.run(
+                        ["ocamlc", "-o", pid, source_path.name],
+                        cwd=tmpdir,
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                    )
+                    if compile_result.returncode == 0:
+                        compile_score = 0.20
+
+                # === STAGE 4: Test Execution (38%) - only if compiles ===
+                test_score = 0.0
+                if compile_score > 0:
+                    exec_path = tmpdir / pid
+                    try:
+                        test_result = subprocess.run(
+                            [f"./{pid}"], cwd=tmpdir, capture_output=True, text=True, timeout=30
+                        )
+                        if test_result.returncode == 0:
+                            test_score = 0.38
+                    except subprocess.TimeoutExpired:
+                        test_score = 0.0
+
+            # === Final Reward ===
+            total_reward = structural_score + type_score + compile_score + test_score
+            rewards.append(total_reward)
+
+            # Detailed logging
+            detailed_logs.append(
+                {
+                    "problem_id": pid,
+                    "total_reward": float(total_reward),
+                    "structural": float(structural_score),
+                    "type_check": float(type_score),
+                    "compile": float(compile_score),
+                    "tests": float(test_score),
+                    "syntax_errors": syntax_errors if "syntax_errors" in locals() else None,
+                    "error_sample": error_details if "error_details" in locals() else None,
+                    "preview": completion[:200],
+                }
+            )
+
+        if logger:
+            logger.log("syntax_aware_breakdown", detailed_logs)
+
+        return rewards
+
+    reward_func.__name__ = "syntax_aware_reward"
+    return reward_func
+
+
 def build_reward_functions(
     evaluator: RewardEvaluator, logger: RewardLogger | None
 ) -> List[Callable]:
     """Expose separate reward streams for heuristics plus OCaml-grounded rewards."""
-    structural_rewards = [
-        make_structural_reward(name, scorer, logger) for name, scorer in STRUCTURAL_REWARD_SPECS
-    ]
-    ocaml_rewards = [
-        make_reward_function("type_check", evaluator, logger),
-        make_reward_function("compile", evaluator, logger),
-        make_reward_function("tests", evaluator, logger),
-    ]
-    return structural_rewards + ocaml_rewards
+
+    return [make_syntax_aware_reward(evaluator, logger)]
 
 
 def create_grpo_config(temperature=None) -> GRPOConfig:
@@ -344,8 +490,6 @@ def create_grpo_config(temperature=None) -> GRPOConfig:
         remove_unused_columns=False,
         num_train_epochs=num_epochs,
         learning_rate=learning_rate,
-        # Note: Experiment with more weightage for type-check and successful execution
-        reward_weights=[0.02, 0.02, 0.38, 0.20, 0.38],
         log_completions=True,  # Important for detecting reward collapse
         # Keep it 1 or 2 – frequent logging helps spot reward collapse
         logging_steps=int(os.environ.get("GRPO_LOGGING_STEPS", "1")),
