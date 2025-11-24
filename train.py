@@ -456,11 +456,11 @@ def create_grpo_config(temperature=None) -> GRPOConfig:
     Note: These settings have been optimized for running on a RTX 6000 48 GB VRAM.
     """
     # set to 4 prompts/step if VRAM allows; reduce when using larger models.
-    per_device_batch = int(os.environ.get("GRPO_BATCH_SIZE", "8"))
+    per_device_batch = int(os.environ.get("GRPO_BATCH_SIZE", "4"))
     # Leave at 1 with batch 4; raise to 2-4 only when you must drop batch size.
-    grad_steps = int(os.environ.get("GRPO_GRAD_ACCUM_STEPS", "2"))
+    grad_steps = int(os.environ.get("GRPO_GRAD_ACCUM_STEPS", "1"))
     # Target 4 completions/prompt for the RTX box—turn this up until you near 44 GB VRAM.
-    num_generations = int(os.environ.get("GRPO_NUM_GENERATIONS", "8"))
+    num_generations = int(os.environ.get("GRPO_NUM_GENERATIONS", "4"))
     # Increase to ~512 tokens on the RTX rig to capture full OCaml problems.
     max_prompt = int(os.environ.get("GRPO_MAX_PROMPT", "512"))
     # Mirror completions at ~512 tokens so solutions + harnesses fit.
