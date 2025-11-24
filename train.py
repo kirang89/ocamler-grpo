@@ -1,10 +1,10 @@
-"""GRPO + LoRA trainer for OCaml problem solving with OCaml-grounded rewards."""
-
 import csv
 import json
 import os
 import re
+import statistics
 import subprocess
+import sys
 import tempfile
 import textwrap
 from pathlib import Path
@@ -119,11 +119,7 @@ def score_has_end_marker(completion: str) -> float:
 
 
 STRUCTURAL_REWARD_SPECS = [
-    ("structure_non_empty", score_non_empty),
-    ("structure_function", score_has_function_definition),
-    ("structure_entrypoint", score_has_entrypoint),
     ("structure_asserts", score_has_asserts),
-    ("structure_harness_complete", score_harness_complete),
     ("structure_end_marker", score_has_end_marker),
 ]
 
@@ -309,16 +305,16 @@ def build_reward_functions(
     return structural_rewards + ocaml_rewards
 
 
-def create_grpo_config() -> GRPOConfig:
+def create_grpo_config(temperature=None) -> GRPOConfig:
     """Assemble GRPO training defaults plus any overrides from env vars.
     Note: These settings have been optimized for running on a RTX 6000 48 GB VRAM.
     """
     # set to 4 prompts/step if VRAM allows; reduce when using larger models.
-    per_device_batch = int(os.environ.get("GRPO_BATCH_SIZE", "4"))
+    per_device_batch = int(os.environ.get("GRPO_BATCH_SIZE", "8"))
     # Leave at 1 with batch 4; raise to 2-4 only when you must drop batch size.
-    grad_steps = int(os.environ.get("GRPO_GRAD_ACCUM_STEPS", "1"))
+    grad_steps = int(os.environ.get("GRPO_GRAD_ACCUM_STEPS", "2"))
     # Target 4 completions/prompt for the RTX box—turn this up until you near 44 GB VRAM.
-    num_generations = int(os.environ.get("GRPO_NUM_GENERATIONS", "4"))
+    num_generations = int(os.environ.get("GRPO_NUM_GENERATIONS", "8"))
     # Increase to ~512 tokens on the RTX rig to capture full OCaml problems.
     max_prompt = int(os.environ.get("GRPO_MAX_PROMPT", "512"))
     # Mirror completions at ~512 tokens so solutions + harnesses fit.
@@ -327,11 +323,17 @@ def create_grpo_config() -> GRPOConfig:
     num_epochs = float(os.environ.get("GRPO_NUM_EPOCHS", "1"))
     # 5e-6 trains safely; bump toward 8e-6 only if the run is stable.
     learning_rate = float(os.environ.get("GRPO_LEARNING_RATE", "5e-6"))
+
     generation_batch_size = int(
         os.environ.get("GRPO_GENERATION_BATCH_SIZE", str(per_device_batch * num_generations))
     )
 
+    if temperature is None:
+        temperature = float(os.environ.get("GRPO_TEMPERATURE", "0.7"))
+
     return GRPOConfig(
+        temperature=temperature,  # for training diversity
+        top_p=0.95,
         output_dir=GRPO_OUTPUT_DIR,
         per_device_train_batch_size=per_device_batch,
         gradient_accumulation_steps=grad_steps,
@@ -342,19 +344,27 @@ def create_grpo_config() -> GRPOConfig:
         remove_unused_columns=False,
         num_train_epochs=num_epochs,
         learning_rate=learning_rate,
-        # Keep it 1 or 2 – frequent logging helps spot reward collapse; the overhead is tiny.
+        # Note: Experiment with more weightage for type-check and successful execution
+        reward_weights=[0.02, 0.02, 0.38, 0.20, 0.38],
+        log_completions=True,  # Important for detecting reward collapse
+        # Keep it 1 or 2 – frequent logging helps spot reward collapse
         logging_steps=int(os.environ.get("GRPO_LOGGING_STEPS", "1")),
+        bf16=True,
         # Disable checkpointing to avoid requires_grad issues on RTX 6000 training.
         gradient_checkpointing=False,
+        eval_strategy="no",
+        save_steps=100,
+        dataloader_num_workers=4,  # Use CPU cores
+        dataloader_pin_memory=True,
     )
 
 
 def create_lora_config() -> LoraConfig:
     """Build a LoraConfig using optional env overrides."""
     # Rank 16 keeps VRAM in check; double it only if you need more adapter capacity.
-    lora_r = int(os.environ.get("LORA_R", "16"))
+    lora_r = int(os.environ.get("LORA_R", "32"))
     # Alpha 32 pairs well with r=16; scale roughly 2x the rank when you change it.
-    lora_alpha = int(os.environ.get("LORA_ALPHA", "32"))
+    lora_alpha = int(os.environ.get("LORA_ALPHA", "64"))
     # Small dropout (5%) stabilizes GRPO; set to 0 if you notice underfitting.
     lora_dropout = float(os.environ.get("LORA_DROPOUT", "0.05"))
     # Bias "none" avoids extra params; use "lora_only" when the base model expects it.
@@ -393,7 +403,6 @@ def resolve_model_id() -> str:
 
 
 def main():
-    """Tie tokenizer/model selection, dataset prep, rewards, and LoRA together."""
     model_id = resolve_model_id()
     dataset = build_training_dataset(TRAINING_PROBLEMS_FILE)
     tokenizer = create_tokenizer(model_id)
