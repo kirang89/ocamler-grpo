@@ -24,6 +24,11 @@ def parse_args() -> argparse.Namespace:
         default=Path("results"),
         help="Directory for CSV and SVG artifacts.",
     )
+    parser.add_argument(
+        "--smooth",
+        action="store_true",
+        help="Apply exponential moving average smoothing to the plots.",
+    )
     return parser.parse_args()
 
 
@@ -278,6 +283,23 @@ def build_reward_series(reward_series: Dict[str, List[Tuple[float, float]]]) -> 
     return series
 
 
+def smooth_points(points: List[Tuple[float, float]], weight: float = 0.9) -> List[Tuple[float, float]]:
+    if not points:
+        return []
+    points = sorted(points, key=lambda x: x[0])
+    smoothed = []
+    last = points[0][1]
+    smoothed.append((points[0][0], last))
+    for x, y in points[1:]:
+        last = last * weight + y * (1 - weight)
+        smoothed.append((x, last))
+    return smoothed
+
+
+def smooth_series_list(series_list: List[Series], weight: float = 0.9) -> List[Series]:
+    return [Series(s.label, smooth_points(s.points, weight), s.color) for s in series_list]
+
+
 def main() -> None:
     args = parse_args()
     trainer_state = locate_trainer_state(args.trainer_state)
@@ -296,6 +318,8 @@ def main() -> None:
     write_reward_long_csv(reward_series, reward_csv_path)
 
     learning_series = build_learning_series(learning_rows)
+    if args.smooth:
+        learning_series = smooth_series_list(learning_series)
     render_svg(
         learning_series,
         args.output_dir / "learning_curve.svg",
@@ -304,6 +328,8 @@ def main() -> None:
     )
 
     reward_chart_series = build_reward_series(reward_series)
+    if args.smooth:
+        reward_chart_series = smooth_series_list(reward_chart_series)
     render_svg(
         reward_chart_series,
         args.output_dir / "reward_curves.svg",
