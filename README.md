@@ -1,61 +1,60 @@
-## Nix-based development shell
+# ocamler-grpo
 
-This repository now ships a flake-powered dev shell that installs everything the GRPO + OCaml
-workflow expects on both Linux and macOS (Intel + Apple Silicon). Highlights:
+**ocamler-grpo** is a machine learning toolkit for fine-tuning LLMs to generate high-quality OCaml code. It aligns models using Generative Representational Preference Optimization (GRPO) with real-time feedback from the OCaml compiler and test suite.
 
-- `llama.cpp` built for your CPU/GPU target
-- `opam`, OCaml, and `uv` for the Python 3.13 GRPO stack
-- `cmake`, `pkg-config`, and the equivalent of `libcurl4-openssl-dev` so llama.cpp builds on Linux
-- helper CLIs like `huggingface-cli`, `git-lfs`, and `uv`
-- automatic `uv sync` whenever you enter the shell (can be disabled)
+## Prerequisites
 
-### 1. Enable flake support (one-time)
+- **Python 3.13+**
+- **uv** (recommended) or `pip`
+- **OCaml** (`ocaml`, `ocamlc` must be in your PATH)
+- **Ollama** (required for evaluation inference)
 
-```bash
-mkdir -p ~/.config/nix
-printf "experimental-features = nix-command flakes\n" >> ~/.config/nix/nix.conf
-```
+## Setup
 
-If you already manage macOS with [nix-darwin](https://github.com/LnL7/nix-darwin) or Linux via
-`/etc/nix/nix.conf`, add the `experimental-features` line there instead.
+You can set up the environment using **Nix** (recommended for reproducibility) or manually using **uv**.
 
-### 2. Enter the shell
+### Option 1: Nix
+Run the following to enter a shell with Python, OCaml, and all tools pre-installed:
 
 ```bash
-nix --extra-experimental-features nix-command --extra-experimental-features flakes develop
+nix develop
 ```
 
-What happens on entry:
-
-1. All requested toolchains (llama.cpp, OCaml, opam, uv, cmake, libcurl headers, huggingface-cli,
-   git-lfs, etc.) are added to `PATH`, compiled for your host architecture.
-2. `uv sync` runs automatically the first time to hydrate `.venv` from `uv.lock`. Subsequent shells
-   run `uv sync --frozen` to ensure the lockfile is honored. Set `UV_AUTO_SYNC_DISABLED=1` before
-   `nix develop` if you want to manage the environment manually.
-
-### macOS tips
-
-- Apple Silicon works out of the box because the flake targets both `x86_64-darwin` and
-  `aarch64-darwin`. `llama.cpp` links against the Xcode-provided Metal + Accelerate frameworks.
-- If you prefer declarative setup, import this flake into your nix-darwin configuration and add the
-  dev shell to your `environment.systemPackages`.
-
-### Linux tips
-
-- The shell bundles `curl.dev`, `openssl`, and `pkg-config`, mirroring the `libcurl4-openssl-dev`
-  experience from Debian/Ubuntu so llama.cpp can be rebuilt locally if desired.
-- `uv sync` pins CPython and all project dependencies according to `uv.lock`, so you can hop straight
-  into `uv run python train.py` or `uv run python evaluate.py`.
-
-### Verification checklist
-
-After `nix develop` completes you should be able to run:
+### Option 2: uv
+If you are not using Nix, ensure you have **OCaml** installed on your system, then install Python dependencies:
 
 ```bash
-llama-cli --help              # llama.cpp frontend
-opam --version                # OCaml package manager
-uv run python evaluate.py     # full GRPO toolchain using the managed virtualenv
-huggingface-cli --help        # dataset/model utilities
+uv sync
 ```
 
-If any of these fail, double-check that you enabled flakes and that `uv sync` succeeded on entry.
+## Usage
+
+### 1. Prepare Data
+Fetch coding problems from Hugging Face (AceCode-87K):
+
+```bash
+uv run python fetch_acecode.py --rows 10000 --output problems10k.csv
+```
+
+### 2. Train
+Fine-tune the base model (default: Qwen2.5-Coder) using GRPO:
+
+```bash
+uv run python train.py
+```
+*Configuration:* Set `TRAINING_PROBLEMS_FILE` and `GRPO_OUTPUT_DIR` via environment variables to customize inputs/outputs.
+
+### 3. Evaluate
+Assess model performance against test cases:
+
+```bash
+uv run python evaluate.py
+```
+*Defaults:* Connects to Ollama at `http://localhost:8080` running `qwen2.5-coder:1.5b-instruct-fp16`.
+
+## Key Files
+
+- `train.py`: Main GRPO training script with custom reward logic (compile/run checks).
+- `evaluate.py`: Evaluation harness using Ollama.
+- `fetch_acecode.py`: Dataset downloader.
+- `GEMINI.md`: Detailed project context and development guide.
