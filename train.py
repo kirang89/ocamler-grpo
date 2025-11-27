@@ -301,9 +301,17 @@ def make_syntax_aware_reward(evaluator, logger):
         * 1 error: 0.28 (75%)
         * 2 errors: 0.19 (50%)
         * 3 errors: 0.11 (30%)
-        * 4+ errors: 0.04 (10%)
-    - Compilation: 20% (only if type checks perfectly)
-    - Tests: 38% (only if compiles)
+        * 4 errors: 0.06 (15%)
+        * 5+ errors: 0.04 (10%)
+    - Compilation: 20% with partial credit (ALWAYS attempted):
+        * Compiles successfully: 0.20 (100%)
+        * Type checks perfectly but fails to compile: 0.10 (50%)
+        * Has type errors and fails to compile: 0.02 (10%)
+    - Tests: 38% (only if compiles successfully)
+
+    Key insight: By always attempting compilation and giving partial credit,
+    we create a gradient bridge from "type-checks but doesn't compile" to
+    "compiles successfully", avoiding local optima.
     """
 
     def reward_func(
@@ -389,22 +397,37 @@ def make_syntax_aware_reward(evaluator, logger):
                     syntax_errors = error_count
                     error_details = stderr[:300]
 
-                # === STAGE 3: Compilation (20%) - only if type checks perfectly ===
+                # === STAGE 3: Compilation (20%) - always attempt ===
+                # Key change: We ALWAYS try to compile, even with type errors
+                # This gives the model gradient signal for "almost compiling"
                 compile_score = 0.0
-                if type_result.returncode == 0:
-                    compile_result = subprocess.run(
-                        ["ocamlc", "-o", pid, source_path.name],
-                        cwd=tmpdir,
-                        capture_output=True,
-                        text=True,
-                        timeout=10,
-                    )
-                    if compile_result.returncode == 0:
-                        compile_score = 0.20
+                compile_succeeded = False
 
-                # === STAGE 4: Test Execution (38%) - only if compiles ===
+                compile_result = subprocess.run(
+                    ["ocamlc", "-o", pid, source_path.name],
+                    cwd=tmpdir,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+
+                if compile_result.returncode == 0:
+                    # Perfect compilation
+                    compile_score = 0.20
+                    compile_succeeded = True
+                elif type_result.returncode == 0:
+                    # Type checked perfectly but compilation failed
+                    # This is closer to success than having type errors
+                    # Give substantial partial credit to bridge the gap
+                    compile_score = 0.10
+                else:
+                    # Had type errors and compilation failed
+                    # Still give tiny credit for attempting valid structure
+                    compile_score = 0.02
+
+                # === STAGE 4: Test Execution (38%) - only if compiles successfully ===
                 test_score = 0.0
-                if compile_score > 0:
+                if compile_succeeded:
                     exec_path = tmpdir / pid
                     try:
                         test_result = subprocess.run(
