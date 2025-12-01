@@ -3,45 +3,28 @@
     "Nix dev shell for ocamler-grpo (llama.cpp + OCaml + uv toolchains)";
 
   inputs = {
-    # Pin nixpkgs to an unstable snapshot so Python 3.13, llama.cpp, and uv stay available.
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-
-    # flake-utils lets us target multiple system types without manual boilerplate.
     flake-utils.url = "github:numtide/flake-utils";
   };
 
   outputs = { self, nixpkgs, flake-utils, ... }:
     let
-      # Cover all machines we actively care about: Intel/ARM Linux + macOS.
       supportedSystems =
         [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
     in flake-utils.lib.eachSystem supportedSystems (system:
       let
-        # Import nixpkgs for the current platform so each dependency is compiled natively.
-        # 'inherit system' passes the current system string (e.g. "x86_64-linux") to nixpkgs.
         pkgs = import nixpkgs {
           inherit system;
-
-          # We set allowUnfree = true because CUDA (needed for NVIDIA GPUs) is proprietary software.
-          # Without this, Nix refuses to build packages that depend on CUDA.
           config.allowUnfree = true;
         };
 
         lib = pkgs.lib;
 
-        # 1. Standard llama.cpp (CPU/Metal).
-        # Nix packages often have default configurations.
         llamaCpp = pkgs.llama-cpp;
-
-        # 2. CUDA-enabled llama.cpp (Linux only).
-        # The '.override' function allows us to change arguments passed to the package builder.
-        # Here, we explicitly tell the llama-cpp expression to enable cudaSupport.
         llamaCppCuda = pkgs.llama-cpp.override { cudaSupport = true; };
 
-        # huggingface-cli is distributed via the huggingface-hub Python package.
         huggingfaceCli = pkgs.python3Packages.huggingface-hub;
 
-        # Common toolchain pieces shared across macOS and Linux.
         commonPackages = with pkgs; [
           cmake
           pkg-config
@@ -54,45 +37,60 @@
           ocamlPackages.findlib
           uv
           huggingfaceCli
-          direnv # Added for managing project-specific environment variables
+          direnv
         ];
 
-        # Linux wants the libcurl headers + misc build utils to mimic libcurl4-openssl-dev.
         linuxExtras = lib.optionals pkgs.stdenv.isLinux [
           pkgs.curl.dev
           pkgs.util-linux
           pkgs.which
+          pkgs.cudaPackages.cudatoolkit
+          pkgs.cudaPackages.cuda_cudart
+          pkgs.cudaPackages.libcublas
         ];
 
-        # macOS shells expose Accelerate + Metal explicitly so llama.cpp can link cleanly.
-        darwinExtras = lib.optionals pkgs.stdenv.isDarwin [
-          # pkgs.darwin.apple_sdk_12_3.frameworks.Accelerate
-          # pkgs.darwin.apple_sdk_12_3.frameworks.Metal
-        ];
+        darwinExtras = lib.optionals pkgs.stdenv.isDarwin [ ];
 
-        # Helper function to build a shell with a specific llama.cpp version.
-        # This avoids code duplication between the default (CPU) and CUDA shells.
         mkDevShell = llamaPkg:
-          pkgs.mkShell {
-            # The packages available in the shell environment.
-            packages = commonPackages ++ linuxExtras ++ darwinExtras
-              ++ [ llamaPkg ];
+          let
+            # Create a wrapper for llama-server
+            llamaServerWrapper = pkgs.writeShellScriptBin "llama-server" ''
+              # Create a temporary directory for our libcuda.so.1 symlink
+              CUDA_STUB_DIR=$(mktemp -d)
+              trap "rm -rf $CUDA_STUB_DIR" EXIT
 
-            # shellHook is a script that runs every time you enter the environment.
+              # Symlink only libcuda.so.1 from system
+              if [ -f /usr/lib/x86_64-linux-gnu/libcuda.so.1 ]; then
+                ln -s /usr/lib/x86_64-linux-gnu/libcuda.so.1 "$CUDA_STUB_DIR/libcuda.so.1"
+                ln -s /usr/lib/x86_64-linux-gnu/libcuda.so.1 "$CUDA_STUB_DIR/libcuda.so"
+              fi
+
+              # Only Nix libraries + our isolated libcuda.so.1
+              export LD_LIBRARY_PATH="${
+                pkgs.lib.makeLibraryPath [
+                  pkgs.cudaPackages.cuda_cudart
+                  pkgs.cudaPackages.libcublas
+                  pkgs.cudaPackages.cudatoolkit
+                ]
+              }:$CUDA_STUB_DIR"
+
+              # Run the actual llama-server from the llamaPkg
+              exec ${llamaPkg}/bin/llama-server "$@"
+            '';
+          in pkgs.mkShell {
+            packages = commonPackages ++ linuxExtras ++ darwinExtras
+              ++ [ llamaServerWrapper ];
+
             shellHook = ''
-              # Basic direnv integration: assume .envrc is allowed and reload it.
-              # This ensures that project-specific environment variables defined in .envrc
-              # are loaded when you enter the Nix shell.
               if test -f .envrc; then
-                eval "$(direnv hook bash)" # Source the direnv hook for bash (common shell)
-                direnv reload >/dev/null 2>&1 || true # Reload .envrc, suppressing output on success or error
+                eval "$(direnv hook bash)"
+                direnv reload >/dev/null 2>&1 || true
               fi
 
               ${autoSyncHook}
             '';
           };
 
-        # Automatically hydrate the Python virtual environment to honor uv.lock.
         autoSyncHook = ''
           export UV_PYTHON_INSTALL_DIR="$PWD/.uv-python"
           export UV_PROJECT_ENVIRONMENT="$PWD/.venv"
@@ -111,12 +109,10 @@
           fi
         '';
       in {
-        # The default shell (run with `nix develop`).
-        # Uses the standard llama.cpp (CPU or Metal on macOS).
-        devShells.default = mkDevShell llamaCpp;
+        devShells.default =
+          mkDevShell (if pkgs.stdenv.isLinux then llamaCppCuda else llamaCpp);
 
-        # The CUDA shell (run with `nix develop .#cuda`).
-        # Uses the CUDA-enabled llama.cpp.
         devShells.cuda = mkDevShell llamaCppCuda;
+        devShells.cpu = mkDevShell llamaCpp;
       });
 }
