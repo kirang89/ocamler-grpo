@@ -38,7 +38,7 @@
           uv
           huggingfaceCli
           direnv
-          stdenv.cc.cc.lib  # Provides libstdc++.so.6 for Python C extensions
+          python312  # Provide Python from Nix for compatibility
         ];
 
         linuxExtras = lib.optionals pkgs.stdenv.isLinux [
@@ -83,8 +83,8 @@
               ++ [ llamaServerWrapper ];
 
             shellHook = ''
-              # Set up library path for Python C extensions
-              export LD_LIBRARY_PATH="${pkgs.stdenv.cc.cc.lib}/lib:${pkgs.lib.makeLibraryPath linuxExtras}:''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+              # Use Nix's Python to avoid glibc conflicts
+              export UV_PYTHON="${pkgs.python312}/bin/python3.12"
 
               if test -f .envrc; then
                 eval "$(direnv hook bash)"
@@ -96,9 +96,8 @@
           };
 
         autoSyncHook = ''
-          export UV_PYTHON_INSTALL_DIR="$PWD/.uv-python"
           export UV_PROJECT_ENVIRONMENT="$PWD/.venv"
-          export UV_PYTHON_DOWNLOADS=auto
+          export UV_PYTHON_DOWNLOADS=never
 
           if [ -z "''${UV_AUTO_SYNC_DISABLED:-}" ]; then
             if [ ! -d "$PWD/.venv" ]; then
