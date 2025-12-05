@@ -83,6 +83,9 @@
               ++ [ llamaServerWrapper ];
 
             shellHook = ''
+              # Set up library path for Python C extensions
+              export LD_LIBRARY_PATH="${pkgs.stdenv.cc.cc.lib}/lib:${pkgs.lib.makeLibraryPath linuxExtras}:''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
               if test -f .envrc; then
                 eval "$(direnv hook bash)"
                 direnv reload >/dev/null 2>&1 || true
