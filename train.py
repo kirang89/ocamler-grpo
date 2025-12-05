@@ -17,10 +17,10 @@ from trl import GRPOConfig, GRPOTrainer
 
 PROMPT_TEMPLATE = textwrap.dedent(
     """
-    You are an expert OCaml engineer. Read the programming problem below and craft an OCaml
-    solution plus a lightweight test harness that executes when run. Output a single OCaml
-    file, keep it under ~200 lines, and end the response with the exact marker `(* END *)`.
-    Do not emit any prose, explanations, or trailing text after the marker.
+    You are an expert OCaml engineer. Read the programming problem below and implement the solution.
+    The problem specifies the function signature - you must use exactly that function name as your entry point.
+    Provide only the implementation code without any test cases. Keep your solution concise (under ~200 lines)
+    and end the response with the exact marker `(* END *)`. Do not emit any prose, explanations, or trailing text after the marker.
 
     Problem ({problem_id}):
     {question}
@@ -34,7 +34,6 @@ GRPO_OUTPUT_DIR = os.environ.get("GRPO_OUTPUT_DIR", "grpo_runs")
 CODE_BLOCK_RE = re.compile(r"```(.*?)```", re.DOTALL)
 LANGUAGE_HINTS = {"ocaml", "ml", "code", "language", "language:ocaml"}
 FUNCTION_DEF_RE = re.compile(r"\blet\s+[a-zA-Z0-9_']+\s*(?:\([^)]*\))?\s*=", re.MULTILINE)
-ENTRYPOINT_HINTS = ("let () =", "let main", "let%test", "let [%test")
 END_MARKER = "(* END *)"
 MIN_NON_EMPTY_LINES = 8
 
@@ -43,12 +42,12 @@ class RewardEvaluator:
     """Caches OCaml compilation results for completions."""
 
     def __init__(self) -> None:
-        self._cache: Dict[Tuple[str, str], Dict[str, bool]] = {}
+        self._cache: Dict[Tuple[str, str, str], Dict[str, bool]] = {}
 
-    def evaluate(self, problem_id: str, completion: str) -> Dict[str, bool]:
-        """Compile and run a completion, returning booleans for downstream reward fns."""
+    def evaluate(self, problem_id: str, completion: str, tests: str = "") -> Dict[str, bool]:
+        """Compile and run a completion combined with pre-defined tests, returning booleans for downstream reward fns."""
         code = extract_code_block(completion)
-        cache_key = (problem_id, code)
+        cache_key = (problem_id, code, tests)
         if cache_key in self._cache:
             return self._cache[cache_key]
         if not code:
@@ -56,10 +55,13 @@ class RewardEvaluator:
             self._cache[cache_key] = result
             return result
 
+        # Combine solution with pre-defined tests
+        combined_code = f"{code.rstrip()}\n\n{tests.strip()}\n"
+
         with tempfile.TemporaryDirectory(prefix=f"{problem_id}_reward_") as tmpdir_str:
             tmpdir = Path(tmpdir_str)
             source_path = tmpdir / f"{problem_id}.ml"
-            source_path.write_text(f"{code.rstrip()}\n", encoding="utf-8")
+            source_path.write_text(combined_code, encoding="utf-8")
 
             type_ok, _ = run_type_check(source_path)
             if type_ok:
@@ -99,29 +101,8 @@ def score_has_function_definition(completion: str) -> float:
     return 1.0 if FUNCTION_DEF_RE.search(code) else 0.0
 
 
-def score_has_entrypoint(completion: str) -> float:
-    code = extract_code_block(completion).lower()
-    has_entry = any(hint in code for hint in ENTRYPOINT_HINTS)
-    return 1.0 if has_entry else 0.0
-
-
-def score_has_asserts(completion: str) -> float:
-    code = extract_code_block(completion).lower()
-    return 1.0 if "assert" in code else 0.0
-
-
-def score_harness_complete(completion: str) -> float:
-    return 1.0 if score_has_entrypoint(completion) and score_has_asserts(completion) else 0.0
-
-
 def score_has_end_marker(completion: str) -> float:
     return 1.0 if completion.strip().endswith(END_MARKER) else 0.0
-
-
-STRUCTURAL_REWARD_SPECS = [
-    ("structure_asserts", score_has_asserts),
-    ("structure_end_marker", score_has_end_marker),
-]
 
 
 class RewardLogger:
@@ -174,9 +155,12 @@ def build_training_dataset(csv_path: str) -> Dataset:
     dataset_rows = []
     for row in rows:
         problem_id = row["id"]
-        question = row["question"]
+        question = row["prompt"]  # CSV column is named "prompt", not "question"
+        tests = row["tests"]
         prompt = PROMPT_TEMPLATE.format(problem_id=problem_id, question=question)
-        dataset_rows.append({"prompt": prompt, "problem_id": problem_id, "question": question})
+        dataset_rows.append(
+            {"prompt": prompt, "problem_id": problem_id, "question": question, "tests": tests}
+        )
     if not dataset_rows:
         raise ValueError(f"No rows found in {csv_path}")
     return Dataset.from_list(dataset_rows)
@@ -294,24 +278,25 @@ def make_syntax_aware_reward(evaluator, logger):
     """
     Syntax-aware reward function with graduated rewards based on error count.
 
-    Reward structure:
-    - Structural: 4% (2% asserts + 2% end marker)
-    - Type checking: 38% with graduated partial credit:
-        * 0 errors (perfect): 0.38 (100%)
-        * 1 error: 0.28 (75%)
-        * 2 errors: 0.19 (50%)
-        * 3 errors: 0.11 (30%)
-        * 4 errors: 0.06 (15%)
-        * 5+ errors: 0.04 (10%)
-    - Compilation: 20% with partial credit (ALWAYS attempted):
-        * Compiles successfully: 0.20 (100%)
-        * Type checks perfectly but fails to compile: 0.10 (50%)
-        * Has type errors and fails to compile: 0.02 (10%)
-    - Tests: 38% (only if compiles successfully)
+    Reward structure optimized for Qwen2.5-Coder-1.5B with pre-defined tests:
+    - Structural: 5% (end marker only)
+    - Type checking: 20% with graduated partial credit:
+        * 0 errors (perfect): 0.20 (100%)
+        * 1 error: 0.15 (75%)
+        * 2 errors: 0.10 (50%)
+        * 3 errors: 0.06 (30%)
+        * 4 errors: 0.03 (15%)
+        * 5+ errors: 0.02 (10%)
+    - Compilation: 10% with partial credit (ALWAYS attempted):
+        * Compiles successfully: 0.10 (100%)
+        * Type checks perfectly but fails to compile: 0.05 (50%)
+        * Has type errors and fails to compile: 0.01 (10%)
+    - Tests: 65% (only if compiles successfully)
 
-    Key insight: By always attempting compilation and giving partial credit,
-    we create a gradient bridge from "type-checks but doesn't compile" to
-    "compiles successfully", avoiding local optima.
+    Key insight: With pre-defined tests preventing reward hacking, we heavily
+    weight test correctness (65%) to create strong gradient away from placeholder
+    solutions. The model can only get 35% for type-correct placeholders, forcing
+    it to learn actual problem-solving rather than settling in local optima.
     """
 
     def reward_func(
@@ -322,20 +307,20 @@ def make_syntax_aware_reward(evaluator, logger):
         **kwargs,
     ) -> List[float]:
         ids = problem_id or kwargs.get("problem_id") or []
+        tests_list = kwargs.get("tests") or []
         rewards = []
         detailed_logs = []
 
         for idx, completion in enumerate(completions):
             pid = ids[idx] if idx < len(ids) else f"sample_{idx}"
+            tests = tests_list[idx] if idx < len(tests_list) else ""
 
-            # === STAGE 1: Structural Checks (4% total) ===
+            # === STAGE 1: Structural Checks (5% total) ===
             code = extract_code_block(completion)
 
             structural_score = 0.0
-            if "assert" in code.lower():
-                structural_score += 0.02
             if completion.strip().endswith(END_MARKER):
-                structural_score += 0.02
+                structural_score += 0.05
 
             # Gate: Must have minimal code
             if not code or count_non_empty_code_lines(completion) < MIN_NON_EMPTY_LINES:
@@ -355,11 +340,14 @@ def make_syntax_aware_reward(evaluator, logger):
                 )
                 continue
 
-            # === STAGE 2: Syntax-Aware Type Checking (38%) ===
+            # === STAGE 2: Syntax-Aware Type Checking (20%) ===
+            # Combine solution with pre-defined tests
+            combined_code = f"{code.rstrip()}\n\n{tests.strip()}\n"
+
             with tempfile.TemporaryDirectory(prefix=f"{pid}_reward_") as tmpdir_str:
                 tmpdir = Path(tmpdir_str)
                 source_path = tmpdir / f"{pid}.ml"
-                source_path.write_text(f"{code.rstrip()}\n", encoding="utf-8")
+                source_path.write_text(combined_code, encoding="utf-8")
 
                 # Run OCaml type checker
                 type_result = subprocess.run(
@@ -372,7 +360,7 @@ def make_syntax_aware_reward(evaluator, logger):
 
                 if type_result.returncode == 0:
                     # Perfect - no syntax errors
-                    type_score = 0.38
+                    type_score = 0.20
                     syntax_errors = 0
                     error_details = "success"
                 else:
@@ -384,20 +372,20 @@ def make_syntax_aware_reward(evaluator, logger):
                     if error_count == 0:
                         type_score = 0.0
                     elif error_count == 1:
-                        type_score = 0.28  # 75% credit - very close!
+                        type_score = 0.15  # 75% credit - very close!
                     elif error_count == 2:
-                        type_score = 0.19  # 50% credit
+                        type_score = 0.10  # 50% credit
                     elif error_count == 3:
-                        type_score = 0.11  # 30% credit
+                        type_score = 0.06  # 30% credit
                     elif error_count == 4:
-                        type_score = 0.06  # 15% credit
+                        type_score = 0.03  # 15% credit
                     else:
-                        type_score = 0.04  # 10% credit for trying
+                        type_score = 0.02  # 10% credit for trying
 
                     syntax_errors = error_count
                     error_details = stderr[:300]
 
-                # === STAGE 3: Compilation (20%) - always attempt ===
+                # === STAGE 3: Compilation (10%) - always attempt ===
                 # Key change: We ALWAYS try to compile, even with type errors
                 # This gives the model gradient signal for "almost compiling"
                 compile_score = 0.0
@@ -413,19 +401,19 @@ def make_syntax_aware_reward(evaluator, logger):
 
                 if compile_result.returncode == 0:
                     # Perfect compilation
-                    compile_score = 0.20
+                    compile_score = 0.10
                     compile_succeeded = True
                 elif type_result.returncode == 0:
                     # Type checked perfectly but compilation failed
                     # This is closer to success than having type errors
                     # Give substantial partial credit to bridge the gap
-                    compile_score = 0.10
+                    compile_score = 0.05
                 else:
                     # Had type errors and compilation failed
                     # Still give tiny credit for attempting valid structure
-                    compile_score = 0.02
+                    compile_score = 0.01
 
-                # === STAGE 4: Test Execution (38%) - only if compiles successfully ===
+                # === STAGE 4: Test Execution (65%) - only if compiles successfully ===
                 test_score = 0.0
                 if compile_succeeded:
                     exec_path = tmpdir / pid
@@ -434,7 +422,7 @@ def make_syntax_aware_reward(evaluator, logger):
                             [f"./{pid}"], cwd=tmpdir, capture_output=True, text=True, timeout=30
                         )
                         if test_result.returncode == 0:
-                            test_score = 0.38
+                            test_score = 0.65
                     except subprocess.TimeoutExpired:
                         test_score = 0.0
 
