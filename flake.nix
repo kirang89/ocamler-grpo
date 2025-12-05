@@ -38,6 +38,7 @@
           uv
           huggingfaceCli
           direnv
+          stdenv.cc.cc.lib  # Provides libstdc++.so.6 for Python C extensions
         ];
 
         linuxExtras = lib.optionals pkgs.stdenv.isLinux [
