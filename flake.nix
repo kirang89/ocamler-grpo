@@ -48,6 +48,7 @@
           pkgs.cudaPackages.cudatoolkit
           pkgs.cudaPackages.cuda_cudart
           pkgs.cudaPackages.libcublas
+          pkgs.stdenv.cc.cc.lib  # Provides libstdc++.so.6 for Python packages with C++ extensions
         ];
 
         darwinExtras = lib.optionals pkgs.stdenv.isDarwin [ ];
@@ -91,6 +92,11 @@
             shellHook = ''
               # Use Nix's Python to avoid glibc conflicts
               export UV_PYTHON="${pkgs.python312}/bin/python3.12"
+
+              ${lib.optionalString pkgs.stdenv.isLinux ''
+                # Add libstdc++ to library path for Python packages with C++ extensions (Linux only)
+                export LD_LIBRARY_PATH="${pkgs.stdenv.cc.cc.lib}/lib:''${LD_LIBRARY_PATH:-}"
+              ''}
 
               if test -f .envrc; then
                 eval "$(direnv hook bash)"
