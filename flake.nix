@@ -23,7 +23,7 @@
         llamaCpp = pkgs.llama-cpp;
         llamaCppCuda = pkgs.llama-cpp.override { cudaSupport = true; };
 
-        huggingfaceCli = pkgs.python3Packages.huggingface-hub;
+        huggingfaceCli = pkgs.python312Packages.huggingface-hub;
 
         commonPackages = with pkgs; [
           cmake
@@ -54,30 +54,36 @@
 
         mkDevShell = llamaPkg:
           let
-            # Create a wrapper for llama-server
-            llamaServerWrapper = pkgs.writeShellScriptBin "llama-server" ''
-              # Create a temporary directory for our libcuda.so.1 symlink
-              CUDA_STUB_DIR=$(mktemp -d)
-              trap "rm -rf $CUDA_STUB_DIR" EXIT
+            # Create a wrapper for llama-server (Linux only, with CUDA setup)
+            llamaServerWrapper = if pkgs.stdenv.isLinux then
+              pkgs.writeShellScriptBin "llama-server" ''
+                # Create a temporary directory for our libcuda.so.1 symlink
+                CUDA_STUB_DIR=$(mktemp -d)
+                trap "rm -rf $CUDA_STUB_DIR" EXIT
 
-              # Symlink only libcuda.so.1 from system
-              if [ -f /usr/lib/x86_64-linux-gnu/libcuda.so.1 ]; then
-                ln -s /usr/lib/x86_64-linux-gnu/libcuda.so.1 "$CUDA_STUB_DIR/libcuda.so.1"
-                ln -s /usr/lib/x86_64-linux-gnu/libcuda.so.1 "$CUDA_STUB_DIR/libcuda.so"
-              fi
+                # Symlink only libcuda.so.1 from system
+                if [ -f /usr/lib/x86_64-linux-gnu/libcuda.so.1 ]; then
+                  ln -s /usr/lib/x86_64-linux-gnu/libcuda.so.1 "$CUDA_STUB_DIR/libcuda.so.1"
+                  ln -s /usr/lib/x86_64-linux-gnu/libcuda.so.1 "$CUDA_STUB_DIR/libcuda.so"
+                fi
 
-              # Only Nix libraries + our isolated libcuda.so.1
-              export LD_LIBRARY_PATH="${
-                pkgs.lib.makeLibraryPath [
-                  pkgs.cudaPackages.cuda_cudart
-                  pkgs.cudaPackages.libcublas
-                  pkgs.cudaPackages.cudatoolkit
-                ]
-              }:$CUDA_STUB_DIR"
+                # Only Nix libraries + our isolated libcuda.so.1
+                export LD_LIBRARY_PATH="${
+                  pkgs.lib.makeLibraryPath [
+                    pkgs.cudaPackages.cuda_cudart
+                    pkgs.cudaPackages.libcublas
+                    pkgs.cudaPackages.cudatoolkit
+                  ]
+                }:$CUDA_STUB_DIR"
 
-              # Run the actual llama-server from the llamaPkg
-              exec ${llamaPkg}/bin/llama-server "$@"
-            '';
+                # Run the actual llama-server from the llamaPkg
+                exec ${llamaPkg}/bin/llama-server "$@"
+              ''
+            else
+              # On Darwin, just use llama-server directly without CUDA wrapper
+              pkgs.writeShellScriptBin "llama-server" ''
+                exec ${llamaPkg}/bin/llama-server "$@"
+              '';
           in pkgs.mkShell {
             packages = commonPackages ++ linuxExtras ++ darwinExtras
               ++ [ llamaServerWrapper ];
@@ -100,9 +106,12 @@
           export UV_PYTHON_DOWNLOADS=never
 
           if [ -z "''${UV_AUTO_SYNC_DISABLED:-}" ]; then
-            if [ ! -d "$PWD/.venv" ]; then
-              echo "[nix] Creating Python environment via uv sync (first run)..."
+            if [ ! -f "$PWD/uv.lock" ]; then
+              echo "[nix] Lock file not found. Creating lock file and Python environment via uv sync (first run)..."
               uv sync
+            elif [ ! -d "$PWD/.venv" ]; then
+              echo "[nix] Creating Python environment via uv sync..."
+              uv sync --frozen
             else
               echo "[nix] Refreshing locked Python dependencies via uv sync --frozen..."
               uv sync --frozen
