@@ -95,7 +95,6 @@
 
               ${lib.optionalString pkgs.stdenv.isLinux ''
                 # Add CUDA and libstdc++ to library path for PyTorch GPU support (Linux only)
-                # Also include system paths for NVIDIA driver libraries (libcuda.so.1)
                 export LD_LIBRARY_PATH="${
                   lib.makeLibraryPath [
                     pkgs.stdenv.cc.cc.lib
@@ -103,7 +102,7 @@
                     pkgs.cudaPackages.cudatoolkit
                     pkgs.cudaPackages.libcublas
                   ]
-                }:/usr/lib/x86_64-linux-gnu:/usr/lib64:''${LD_LIBRARY_PATH:-}"
+                }:''${LD_LIBRARY_PATH:-}"
               ''}
 
               if test -f .envrc; then
