@@ -10,6 +10,7 @@ import textwrap
 from pathlib import Path
 from typing import Callable, Dict, List, Tuple
 
+import torch
 from datasets import Dataset
 from peft import LoraConfig, TaskType
 from transformers import AutoTokenizer
@@ -466,6 +467,10 @@ def create_grpo_config(temperature=None) -> GRPOConfig:
     """Assemble GRPO training defaults plus any overrides from env vars.
     Note: These settings have been optimized for running on a RTX 6000 48 GB VRAM.
     """
+    # Detect CUDA availability
+    cuda_available = torch.cuda.is_available()
+    use_bf16 = cuda_available and torch.cuda.is_bf16_supported()
+
     # set to 4 prompts/step if VRAM allows; reduce when using larger models.
     per_device_batch = int(os.environ.get("GRPO_BATCH_SIZE", "4"))
     # Leave at 1 with batch 4; raise to 2-4 only when you must drop batch size.
@@ -504,7 +509,7 @@ def create_grpo_config(temperature=None) -> GRPOConfig:
         log_completions=True,  # Important for detecting reward collapse
         # Keep it 1 or 2 – frequent logging helps spot reward collapse
         logging_steps=int(os.environ.get("GRPO_LOGGING_STEPS", "1")),
-        bf16=True,
+        bf16=use_bf16,  # Auto-detect bf16 support based on CUDA availability
         # Disable checkpointing to avoid requires_grad issues on RTX 6000 training.
         gradient_checkpointing=False,
         eval_strategy="no",
