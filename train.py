@@ -7,8 +7,38 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import ctypes
 from pathlib import Path
 from typing import Callable, Dict, List, Tuple
+
+def _ensure_cuda_driver():
+    """
+    Attempt to locate and preload libcuda.so.1 if it's not automatically found.
+    This is common on cloud instances where the driver is in a non-standard path
+    or LD_LIBRARY_PATH isn't set in the python environment.
+    """
+    if sys.platform != "linux":
+        return
+
+    # Common search paths for libcuda.so.1 on Linux
+    search_paths = [
+        "/usr/lib/x86_64-linux-gnu/libcuda.so.1",
+        "/usr/lib64/libcuda.so.1",
+        "/usr/local/cuda/lib64/libcuda.so.1",
+        "/usr/lib/libcuda.so.1",
+    ]
+
+    # Try to load the library
+    for path in search_paths:
+        if os.path.exists(path):
+            try:
+                # RTLD_GLOBAL ensures symbols are visible to subsequently loaded libraries (like torch)
+                ctypes.CDLL(path, mode=ctypes.RTLD_GLOBAL)
+                return
+            except OSError:
+                continue
+
+_ensure_cuda_driver()
 
 import torch
 from datasets import Dataset
