@@ -94,8 +94,16 @@
               export UV_PYTHON="${pkgs.python312}/bin/python3.12"
 
               ${lib.optionalString pkgs.stdenv.isLinux ''
-                # Add libstdc++ to library path for Python packages with C++ extensions (Linux only)
-                export LD_LIBRARY_PATH="${pkgs.stdenv.cc.cc.lib}/lib:''${LD_LIBRARY_PATH:-}"
+                # Add CUDA and libstdc++ to library path for PyTorch GPU support (Linux only)
+                # Also include system paths for NVIDIA driver libraries (libcuda.so.1)
+                export LD_LIBRARY_PATH="${
+                  lib.makeLibraryPath [
+                    pkgs.stdenv.cc.cc.lib
+                    pkgs.cudaPackages.cuda_cudart
+                    pkgs.cudaPackages.cudatoolkit
+                    pkgs.cudaPackages.libcublas
+                  ]
+                }:/usr/lib/x86_64-linux-gnu:/usr/lib64:''${LD_LIBRARY_PATH:-}"
               ''}
 
               if test -f .envrc; then
