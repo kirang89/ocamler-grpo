@@ -1,4 +1,5 @@
 import csv
+import ctypes
 import json
 import os
 import re
@@ -7,9 +8,9 @@ import subprocess
 import sys
 import tempfile
 import textwrap
-import ctypes
 from pathlib import Path
 from typing import Callable, Dict, List, Tuple
+
 
 def _ensure_cuda_driver():
     """
@@ -38,12 +39,14 @@ def _ensure_cuda_driver():
             except OSError:
                 continue
 
+
 _ensure_cuda_driver()
 
 import torch
 from datasets import Dataset
 from peft import LoraConfig, TaskType
 from transformers import AutoTokenizer
+from transformers.trainer_utils import get_last_checkpoint
 from trl import GRPOConfig, GRPOTrainer
 
 PROMPT_TEMPLATE = textwrap.dedent(
@@ -341,6 +344,7 @@ def make_syntax_aware_reward(evaluator, logger):
         tests_list = kwargs.get("tests") or []
         rewards = []
         detailed_logs = []
+        completion_logs = []
 
         for idx, completion in enumerate(completions):
             pid = ids[idx] if idx < len(ids) else f"sample_{idx}"
@@ -367,6 +371,14 @@ def make_syntax_aware_reward(evaluator, logger):
                         "syntax_errors": None,
                         "failure_reason": "insufficient_code",
                         "preview": completion[:200],
+                    }
+                )
+                completion_logs.append(
+                    {
+                        "problem_id": pid,
+                        "reward": float(structural_score),
+                        "length": len(completion),
+                        "completion": completion,
                     }
                 )
                 continue
@@ -476,8 +488,18 @@ def make_syntax_aware_reward(evaluator, logger):
                 }
             )
 
+            completion_logs.append(
+                {
+                    "problem_id": pid,
+                    "reward": float(total_reward),
+                    "length": len(completion),
+                    "completion": completion,
+                }
+            )
+
         if logger:
             logger.log("syntax_aware_breakdown", detailed_logs)
+            logger.log("completions", completion_logs)
 
         return rewards
 
@@ -612,7 +634,9 @@ def main():
         processing_class=tokenizer,
         peft_config=lora_config,
     )
+
     trainer.train()
+
     trainer.save_model(GRPO_OUTPUT_DIR)
     tokenizer.save_pretrained(GRPO_OUTPUT_DIR)
 
