@@ -651,6 +651,9 @@ def create_grpo_config(temperature=None) -> GRPOConfig:
     if temperature is None:
         temperature = float(os.environ.get("GRPO_TEMPERATURE", "0.7"))
 
+    # Gradient clipping to prevent training instability
+    max_grad_norm = float(os.environ.get("GRPO_MAX_GRAD_NORM", "1.0"))
+
     return GRPOConfig(
         temperature=temperature,  # for training diversity
         top_p=0.95,
@@ -664,6 +667,7 @@ def create_grpo_config(temperature=None) -> GRPOConfig:
         remove_unused_columns=False,
         num_train_epochs=num_epochs,
         learning_rate=learning_rate,
+        max_grad_norm=max_grad_norm,  # Clip gradients to prevent explosions
         log_completions=True,  # Important for detecting reward collapse
         # Keep it 1 or 2 – frequent logging helps spot reward collapse
         logging_steps=int(os.environ.get("GRPO_LOGGING_STEPS", "1")),
