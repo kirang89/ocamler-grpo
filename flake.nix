@@ -106,8 +106,8 @@
               ''}
 
               if test -f .envrc; then
+                direnv allow >/dev/null 2>&1 || true
                 eval "$(direnv hook bash)"
-                direnv reload >/dev/null 2>&1 || true
               fi
 
               ${autoSyncHook}
