@@ -71,6 +71,11 @@ FUNCTION_DEF_RE = re.compile(r"\blet\s+[a-zA-Z0-9_']+\s*(?:\([^)]*\))?\s*=", re.
 END_MARKER = "(* END *)"
 MIN_NON_EMPTY_LINES = 8
 
+# Reward cap for completions that hit max length without END marker
+# Caps reward at 0.05 (only minimal type-check credit) to create strong
+# gradient against filibustering while preserving tiny quality ranking
+RUNAWAY_REWARD_CAP = float(os.environ.get("RUNAWAY_REWARD_CAP", "0.05"))
+
 
 class RewardEvaluator:
     """Caches OCaml compilation results for completions."""
@@ -471,6 +476,18 @@ def make_syntax_aware_reward(evaluator, logger):
 
             # === Final Reward ===
             total_reward = structural_score + type_score + compile_score + test_score
+
+            # Apply aggressive cap for runaway completions
+            # (hit max length without END marker)
+            is_runaway = len(completion) >= 500 and not completion.strip().endswith(END_MARKER)
+            if is_runaway:
+                # Cap at minimal reward - keeps tiny type-check credit only
+                # This creates a cliff while preserving minimal quality signal
+                total_reward = min(total_reward, RUNAWAY_REWARD_CAP)
+                penalty_applied = True
+            else:
+                penalty_applied = False
+
             rewards.append(total_reward)
 
             # Detailed logging
@@ -484,6 +501,7 @@ def make_syntax_aware_reward(evaluator, logger):
                     "tests": float(test_score),
                     "syntax_errors": syntax_errors if "syntax_errors" in locals() else None,
                     "error_sample": error_details if "error_details" in locals() else None,
+                    "runaway_capped": penalty_applied,
                     "preview": completion[:200],
                 }
             )
@@ -493,6 +511,7 @@ def make_syntax_aware_reward(evaluator, logger):
                     "problem_id": pid,
                     "reward": float(total_reward),
                     "length": len(completion),
+                    "runaway_capped": penalty_applied,
                     "completion": completion,
                 }
             )
