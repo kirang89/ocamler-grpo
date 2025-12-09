@@ -110,6 +110,9 @@
                 eval "$(direnv hook bash)"
               fi
 
+              # Customize bash prompt to show nix-shell status with username
+              export PS1="\[\033[1;35m\]\u\[\033[0m\]@\[\033[1;34m\][nix-shell:\[\033[1;32m\]ocamler-grpo\[\033[1;34m\]]\[\033[0m\] \[\033[1;36m\]\w\[\033[0m\] \$ "
+
               ${autoSyncHook}
             '';
           };
