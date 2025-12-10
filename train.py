@@ -463,18 +463,15 @@ def make_syntax_aware_reward(evaluator, logger):
             # === STAGE 1: Structural Checks (5% total) ===
             code = extract_code_block(completion)
 
-            structural_score = 0.0
-            if completion.strip().endswith(END_MARKER):
-                structural_score += 0.05
-
-            # Gate: Must have minimal code
+            # Gate: Must have minimal code (check BEFORE giving any reward)
+            # NO REWARD for just END marker - prevents gaming
             if not code or count_non_empty_code_lines(completion) < MIN_NON_EMPTY_LINES:
-                rewards.append(structural_score)
+                rewards.append(0.0)
                 detailed_logs.append(
                     {
                         "problem_id": pid,
-                        "total_reward": float(structural_score),
-                        "structural": float(structural_score),
+                        "total_reward": 0.0,
+                        "structural": 0.0,
                         "type_check": 0.0,
                         "compile": 0.0,
                         "tests": 0.0,
@@ -486,12 +483,17 @@ def make_syntax_aware_reward(evaluator, logger):
                 completion_logs.append(
                     {
                         "problem_id": pid,
-                        "reward": float(structural_score),
+                        "reward": 0.0,
                         "length": len(completion),
                         "completion": completion,
                     }
                 )
                 continue
+
+            # Passed gate - now calculate structural score (only if there's actual code)
+            structural_score = 0.0
+            if completion.strip().endswith(END_MARKER):
+                structural_score += 0.05
 
             # === STAGE 2: Syntax-Aware Type Checking (20%) ===
             # Combine solution with pre-defined tests
