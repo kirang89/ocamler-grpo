@@ -615,12 +615,15 @@ def make_syntax_aware_reward(evaluator, logger):
             # === Final Reward ===
             total_reward = structural_score + type_score + compile_score + test_score
 
-            # Apply multiplicative penalty for runaway completions
+            # Apply penalty for runaway completions
             # (hit max length without END marker)
             is_runaway = len(completion) >= 500 and not completion.strip().endswith(END_MARKER)
             if is_runaway:
                 # Zero reward to strongly discourage filibustering
                 total_reward = 0.0
+                penalty_applied = True
+            else:
+                penalty_applied = False
 
             rewards.append(total_reward)
 
