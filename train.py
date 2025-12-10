@@ -619,12 +619,8 @@ def make_syntax_aware_reward(evaluator, logger):
             # (hit max length without END marker)
             is_runaway = len(completion) >= 500 and not completion.strip().endswith(END_MARKER)
             if is_runaway:
-                # Multiply reward to strongly discourage filibustering
-                # while preserving relative quality ranking between generations
-                total_reward *= RUNAWAY_PENALTY_MULTIPLIER
-                penalty_applied = True
-            else:
-                penalty_applied = False
+                # Zero reward to strongly discourage filibustering
+                total_reward = 0.0
 
             rewards.append(total_reward)
 
