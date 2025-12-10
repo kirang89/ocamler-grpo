@@ -45,7 +45,7 @@ def _ensure_cuda_driver():
 _ensure_cuda_driver()
 
 import torch
-from datasets import Dataset
+from datasets import Dataset, load_dataset
 from peft import LoraConfig, TaskType
 from transformers import AutoTokenizer
 from transformers.trainer_utils import get_last_checkpoint
@@ -64,7 +64,7 @@ PROMPT_TEMPLATE = textwrap.dedent(
 ).strip()
 
 DEFAULT_MODEL_ID = "Qwen/Qwen2.5-Coder-1.5B-Instruct"
-TRAINING_PROBLEMS_FILE = os.environ.get("TRAINING_PROBLEMS_FILE", "problems.csv")
+TRAINING_DATASET = os.environ.get("TRAINING_DATASET", "kiranpg/ocaml-training-problems")
 GRPO_OUTPUT_DIR = os.environ.get("GRPO_OUTPUT_DIR", "grpo_runs")
 
 CODE_BLOCK_RE = re.compile(r"```(.*?)```", re.DOTALL)
@@ -268,27 +268,45 @@ def log_reward_entries(
     logger.log(reward_name, entries)
 
 
-def read_problems(csv_path: str) -> List[Dict[str, str]]:
-    """Return rows from the curated OCaml problem CSV."""
-    with open(csv_path, "r", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        return list(reader)
+def build_training_dataset(dataset_id: str) -> Dataset:
+    """Load a Hugging Face dataset or CSV file and format it for GRPO training.
 
+    Args:
+        dataset_id: Either a Hugging Face dataset identifier (e.g., 'username/dataset-name')
+                   or a local path to a CSV file (for backwards compatibility)
 
-def build_training_dataset(csv_path: str) -> Dataset:
-    """Wrap the CSV in a Hugging Face Dataset containing prompts per problem."""
-    rows = read_problems(csv_path)
+    Returns:
+        A Hugging Face Dataset with formatted prompts for each problem
+    """
+    # Check if it's a local CSV file (backwards compatibility)
+    if dataset_id.endswith(".csv") and os.path.exists(dataset_id):
+        with open(dataset_id, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+        source = f"local CSV {dataset_id}"
+    else:
+        # Use "force_redownload" to always re-download and show progress
+        hf_dataset = load_dataset(
+            dataset_id, split="train", download_mode="reuse_dataset_if_exists"
+        )
+        rows = [dict(row) for row in hf_dataset]
+        source = f"HF dataset {dataset_id}"
+
+    # Process all rows into training format
     dataset_rows = []
     for row in rows:
         problem_id = row["id"]
-        question = row["prompt"]  # CSV column is named "prompt", not "question"
+        question = row["prompt"]  # Column is named "prompt"
         tests = row["tests"]
         prompt = PROMPT_TEMPLATE.format(problem_id=problem_id, question=question)
         dataset_rows.append(
             {"prompt": prompt, "problem_id": problem_id, "question": question, "tests": tests}
         )
+
     if not dataset_rows:
-        raise ValueError(f"No rows found in {csv_path}")
+        raise ValueError(f"No rows found in dataset: {dataset_id}")
+
+    print(f"Loaded {len(dataset_rows)} training problems from {source}")
     return Dataset.from_list(dataset_rows)
 
 
@@ -726,7 +744,7 @@ def resolve_model_id() -> str:
 
 def main():
     model_id = resolve_model_id()
-    dataset = build_training_dataset(TRAINING_PROBLEMS_FILE)
+    dataset = build_training_dataset(TRAINING_DATASET)
     tokenizer = create_tokenizer(model_id)
     evaluator = RewardEvaluator()
     output_path = Path(GRPO_OUTPUT_DIR)
