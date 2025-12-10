@@ -690,6 +690,8 @@ def create_grpo_config(temperature=None) -> GRPOConfig:
     num_epochs = float(os.environ.get("GRPO_NUM_EPOCHS", "1"))
     # 5e-6 trains safely; bump toward 8e-6 only if the run is stable.
     learning_rate = float(os.environ.get("GRPO_LEARNING_RATE", "5e-6"))
+    # Use KL Coefficient to penalize large policy shifts from reference model
+    beta = float(os.environ.get("GRPO_BETA", "0.0"))
 
     generation_batch_size = int(
         os.environ.get("GRPO_GENERATION_BATCH_SIZE", str(per_device_batch * num_generations))
@@ -725,6 +727,7 @@ def create_grpo_config(temperature=None) -> GRPOConfig:
         save_steps=100,
         dataloader_num_workers=4,  # Use CPU cores
         dataloader_pin_memory=True,
+        beta=beta,
     )
 
 
