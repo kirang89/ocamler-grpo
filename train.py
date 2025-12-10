@@ -58,6 +58,37 @@ PROMPT_TEMPLATE = textwrap.dedent(
     Provide only the implementation code without any test cases. Keep your solution concise (under ~200 lines)
     and end the response with the exact marker `(* END *)`. Do not emit any prose, explanations, or trailing text after the marker.
 
+    Example 1 (List operation with higher-order function):
+    Problem: Filter positive numbers from a list
+    Solution:
+    ```ocaml
+    let filter_positive (numbers : int list) : int list =
+      List.filter (fun x -> x > 0) numbers
+    (* END *)
+    ```
+
+    Example 2 (String operation):
+    Problem: Count occurrences of a character in a string
+    Solution:
+    ```ocaml
+    let count_char (s : string) (c : char) : int =
+      String.fold_left (fun acc ch -> if ch = c then acc + 1 else acc) 0 s
+    (* END *)
+    ```
+
+    Example 3 (Recursive with pattern matching):
+    Problem: Calculate the sum of all elements in a list
+    Solution:
+    ```ocaml
+    let rec sum_list (lst : int list) : int =
+      match lst with
+      | [] -> 0
+      | head :: tail -> head + sum_list tail
+    (* END *)
+    ```
+
+    Now solve this problem:
+
     Problem ({problem_id}):
     {question}
     """
