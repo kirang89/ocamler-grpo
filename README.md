@@ -4,57 +4,72 @@
 
 ## Prerequisites
 
-- **Python 3.13+**
-- **uv** (recommended) or `pip`
-- **OCaml** (`ocaml`, `ocamlc` must be in your PATH)
-- **Ollama** (required for evaluation inference)
+- **Nix** (with flakes enabled): Install it from [here](https://nixos.wiki/wiki/Nix_Installation_Guide).
 
 ## Setup
 
-You can set up the environment using **Nix** (recommended for reproducibility) or manually using **uv**.
+### 1. Clone the Repository
 
-### Option 1: Nix
-Run the following to enter a shell with Python, OCaml, and all tools pre-installed:
+```bash
+git clone https://github.com/your-org/ocamler-grpo.git
+cd ocamler-grpo
+```
 
+### 2. Setup Environment with Nix
+
+Enter a development shell with Python, OCaml, uv, and all tools pre-installed:
+
+**macOS:**
 ```bash
 nix develop
 ```
 
-### Option 2: uv
-If you are not using Nix, ensure you have **OCaml** installed on your system, then install Python dependencies:
-
+**Linux with CUDA:**
 ```bash
-uv sync
+nix develop .#cuda
 ```
 
-## Usage
-
-### 1. Prepare Data
-Fetch coding problems from Hugging Face (AceCode-87K):
+### 2.5 Install pytorch with CUDA support
 
 ```bash
-uv run python fetch_acecode.py --rows 10000 --output problems10k.csv
+uv sync --extra cuda
 ```
 
-### 2. Train
+### 3. Start Model Server
+
+The Nix environment includes llama.cpp pre-installed. Start a model server:
+
+```bash
+llama-server -hf unsloth/Qwen2.5-Coder-1.5B-Instruct-GGUF:F16 -c 4096 -ngl -1
+```
+
+## Training
+
 Fine-tune the base model (default: Qwen2.5-Coder) using GRPO:
 
 ```bash
-uv run python train.py
+./run-training.sh
 ```
-*Configuration:* Set `TRAINING_PROBLEMS_FILE` and `GRPO_OUTPUT_DIR` via environment variables to customize inputs/outputs.
 
-### 3. Evaluate
+This starts the model training using the [default training dataset](https://huggingface.co/datasets/kiranpg/ocaml-training-problems) in the background and logs to `training.log`.
+
+
+## Evaluate Model Performance
+
 Assess model performance against test cases:
 
 ```bash
 uv run python evaluate.py
 ```
-*Defaults:* Connects to Ollama at `http://localhost:8080` running `qwen2.5-coder:1.5b-instruct-fp16`.
 
-## Key Files
+## Configuration
 
-- `train.py`: Main GRPO training script with custom reward logic (compile/run checks).
-- `evaluate.py`: Evaluation harness using Ollama.
-- `fetch_acecode.py`: Dataset downloader.
-- `GEMINI.md`: Detailed project context and development guide.
+All parameters using for training in `train.py` can be configured by environment variables that should be added to `.envrc`.
+
+## Metrics
+
+There are three key logs to understand the training:
+1. `training.log` -> Logs the training. Good for checking progress. Verbose.
+2. `learning.log` -> Logs the specific learning metrics of interest. For more information about them, refer [the doc](doc/metrics.md).
+3. `completions.jsonl` -> Structure log of model completions in the following format:
+   ```{"problem_id": "", "reward": 0.0, "length": 895, "runaway_penalty_applied": true/false, "completion":""}```
