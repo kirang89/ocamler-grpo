@@ -109,6 +109,10 @@ MIN_NON_EMPTY_LINES = 8
 # while preserving relative quality signals between generations
 RUNAWAY_PENALTY_MULTIPLIER = float(os.environ.get("RUNAWAY_PENALTY_MULTIPLIER", "0.3"))
 
+# Entropy bonus coefficient to encourage diverse outputs
+# Tune between 0.01-0.05 to balance exploration vs exploitation
+ENTROPY_BONUS_COEFF = float(os.environ.get("GRPO_ENTROPY_BONUS", "0.02"))
+
 
 class RewardEvaluator:
     """Caches OCaml compilation results for completions."""
@@ -403,6 +407,57 @@ def extract_code_block(text: str) -> str:
     return text.strip()
 
 
+def compute_diversity_score(text: str) -> float:
+    """
+    Compute a diversity score to approximate entropy and encourage exploration.
+
+    This function measures text diversity through:
+    1. Unique token ratio (lexical diversity)
+    2. Character diversity
+
+    Returns a value between 0 and 1, where higher values indicate more diverse,
+    exploratory outputs. This creates gradient toward varied completions even
+    when task reward is zero, helping prevent mode collapse.
+
+    Args:
+        text: The completion text to score
+
+    Returns:
+        float: Diversity score in range [0, 1]
+    """
+    if not text or len(text) < 10:
+        return 0.0
+
+    # Tokenize on whitespace and common OCaml delimiters
+    tokens = re.split(r'[\s\(\)\[\]\{\},;]+', text)
+    tokens = [t for t in tokens if t]
+
+    if not tokens:
+        return 0.0
+
+    # Calculate unique token ratio (lexical diversity)
+    unique_tokens = len(set(tokens))
+    total_tokens = len(tokens)
+    unique_ratio = unique_tokens / total_tokens
+
+    # Calculate character diversity
+    unique_chars = len(set(text))
+    # Normalize by expected character diversity in code (typically 20-60 unique chars)
+    char_diversity = min(unique_chars / 40.0, 1.0)
+
+    # Penalize very repetitive patterns (e.g., "BEGIN END BEGIN END...")
+    # If we have very low unique ratio, reduce the score more aggressively
+    if unique_ratio < 0.1:
+        repetition_penalty = 0.5
+    else:
+        repetition_penalty = 1.0
+
+    # Combine metrics: weight token diversity more heavily (70%) than char diversity (30%)
+    diversity_score = (unique_ratio * 0.7 + char_diversity * 0.3) * repetition_penalty
+
+    return diversity_score
+
+
 def make_structural_reward(
     reward_name: str, scorer: Callable[[str], float], logger: RewardLogger | None
 ) -> Callable:
@@ -615,6 +670,13 @@ def make_syntax_aware_reward(evaluator, logger):
             # === Final Reward ===
             total_reward = structural_score + type_score + compile_score + test_score
 
+            # Add entropy bonus to encourage diverse outputs
+            # This creates gradient toward exploration even when task reward is zero,
+            # helping prevent mode collapse to degenerate patterns
+            diversity_score = compute_diversity_score(completion)
+            entropy_bonus = ENTROPY_BONUS_COEFF * diversity_score
+            total_reward += entropy_bonus
+
             # Apply penalty for runaway completions
             # (hit max length without END marker)
             is_runaway = len(completion) >= 500 and not completion.strip().endswith(END_MARKER)
@@ -636,6 +698,8 @@ def make_syntax_aware_reward(evaluator, logger):
                     "type_check": float(type_score),
                     "compile": float(compile_score),
                     "tests": float(test_score),
+                    "entropy_bonus": float(entropy_bonus),
+                    "diversity_score": float(diversity_score),
                     "syntax_errors": syntax_errors if "syntax_errors" in locals() else None,
                     "error_sample": error_details if "error_details" in locals() else None,
                     "runaway_penalty_applied": penalty_applied,
