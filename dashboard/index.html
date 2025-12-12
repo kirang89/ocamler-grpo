@@ -105,6 +105,7 @@
     <header>
         <div class="header-content">
             <h1>GRPO Training Dashboard</h1>
+            <p class="subtitle">Epoch: <span id="epochNumber">Loading...</span></p>
             <p class="subtitle">Last updated: <span id="timestamp">Loading...</span></p>
         </div>
         <button id="themeToggle" class="theme-toggle">Switch Theme</button>
@@ -305,6 +306,11 @@
 
                 currentData = data;
                 document.getElementById('timestamp').textContent = new Date().toLocaleString();
+                if (data.latest_epoch !== null && data.latest_epoch !== undefined) {
+                    document.getElementById('epochNumber').textContent = parseFloat(data.latest_epoch).toFixed(2);
+                } else {
+                    document.getElementById('epochNumber').textContent = 'N/A';
+                }
                 renderCharts(data);
 
             } catch (err) {

@@ -67,6 +67,7 @@ def parse_log_file(log_path):
 
     result = {
         'epochs': sorted_epochs,
+        'latest_epoch': sorted_epochs[-1] if sorted_epochs else None,
         'loss': [mean(epoch_data[e]['loss']) for e in sorted_epochs],
         'grad': [mean(epoch_data[e]['grad']) for e in sorted_epochs],
         'lr': [mean(epoch_data[e]['lr']) for e in sorted_epochs],
@@ -104,7 +105,7 @@ if __name__ == '__main__':
 
     LOG_FILE = args.log
 
-    print(f'Starting dashboard server...')
+    print('Starting dashboard server...')
     print(f'  Log file: {LOG_FILE}')
     print(f'  Dashboard: http://localhost:{args.port}')
 
