@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GRPO Training Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --bg-color: #0f0f1a;
+            --text-color: #e0e0e0;
+            --card-bg: #1a1a2e;
+            --subtitle-color: #888;
+            --chart-title-color: #fff;
+            --grid-color: #333;
+            --tick-color: #888;
+        }
+
+        [data-theme="light"] {
+            --bg-color: #f3f4f6;
+            --text-color: #1f2937;
+            --card-bg: #ffffff;
+            --subtitle-color: #6b7280;
+            --chart-title-color: #111827;
+            --grid-color: #e5e7eb;
+            --tick-color: #6b7280;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg-color);
+            color: var(--text-color);
+            padding: 20px;
+            min-height: 100vh;
+            transition: background-color 0.3s, color 0.3s;
+        }
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+            max-width: 1800px;
+            margin-left: auto;
+            margin-right: auto;
+            padding: 0 10px;
+        }
+        .header-content {
+            text-align: left;
+        }
+        h1 {
+            font-size: 1.8rem;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+        .subtitle {
+            color: var(--subtitle-color);
+            font-size: 0.9rem;
+        }
+        .theme-toggle {
+            background: var(--card-bg);
+            border: 1px solid var(--grid-color);
+            color: var(--text-color);
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: all 0.2s;
+        }
+        .theme-toggle:hover {
+            opacity: 0.8;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(450px, 1fr));
+            gap: 20px;
+            max-width: 1800px;
+            margin: 0 auto;
+        }
+        .chart-card {
+            background: var(--card-bg);
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            transition: background-color 0.3s;
+        }
+        .chart-title {
+            font-size: 1rem;
+            font-weight: 500;
+            margin-bottom: 12px;
+            color: var(--chart-title-color);
+        }
+        canvas {
+            width: 100% !important;
+            height: 250px !important;
+        }
+        .error {
+            color: #ef4444;
+            text-align: center;
+            padding: 40px;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="header-content">
+            <h1>GRPO Training Dashboard</h1>
+            <p class="subtitle">Last updated: <span id="timestamp">Loading...</span></p>
+        </div>
+        <button id="themeToggle" class="theme-toggle">Switch Theme</button>
+    </header>
+
+    <div class="grid">
+        <div class="chart-card">
+            <div class="chart-title">Loss</div>
+            <canvas id="lossChart"></canvas>
+        </div>
+        <div class="chart-card">
+            <div class="chart-title">Gradient Norm</div>
+            <canvas id="gradChart"></canvas>
+        </div>
+        <div class="chart-card">
+            <div class="chart-title">Learning Rate</div>
+            <canvas id="lrChart"></canvas>
+        </div>
+        <div class="chart-card">
+            <div class="chart-title">Entropy</div>
+            <canvas id="entropyChart"></canvas>
+        </div>
+        <div class="chart-card">
+            <div class="chart-title">Reward (mean ± std)</div>
+            <canvas id="rewardChart"></canvas>
+        </div>
+        <div class="chart-card">
+            <div class="chart-title">Fraction Zero Std</div>
+            <canvas id="fracZeroChart"></canvas>
+        </div>
+    </div>
+
+    <script>
+        // State
+        let charts = {};
+        let currentData = null;
+
+        // Theme Management
+        function initTheme() {
+            const savedTheme = localStorage.getItem('theme') || 'dark';
+            document.documentElement.setAttribute('data-theme', savedTheme);
+            updateToggleButton(savedTheme);
+        }
+
+        function toggleTheme() {
+            const currentTheme = document.documentElement.getAttribute('data-theme');
+            const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+            document.documentElement.setAttribute('data-theme', newTheme);
+            localStorage.setItem('theme', newTheme);
+            updateToggleButton(newTheme);
+            if (currentData) renderCharts(currentData); // Re-render to update chart colors
+        }
+
+        function updateToggleButton(theme) {
+            const btn = document.getElementById('themeToggle');
+            btn.textContent = theme === 'light' ? '🌙 Dark Mode' : '☀️ Light Mode';
+        }
+
+        document.getElementById('themeToggle').addEventListener('click', toggleTheme);
+        initTheme();
+
+        // Chart Helpers
+        function getChartColors() {
+            const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+            return {
+                grid: isLight ? '#e5e7eb' : '#333',
+                tick: isLight ? '#6b7280' : '#888',
+                text: isLight ? '#374151' : '#ccc'
+            };
+        }
+
+        function getCommonConfig(colors) {
+            return {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    x: {
+                        title: { display: true, text: 'Epoch', color: colors.tick },
+                        ticks: { color: colors.tick },
+                        grid: { color: colors.grid }
+                    },
+                    y: {
+                        ticks: { color: colors.tick },
+                        grid: { color: colors.grid }
+                    }
+                }
+            };
+        }
+
+        function destroyChart(id) {
+            if (charts[id]) {
+                charts[id].destroy();
+                delete charts[id];
+            }
+        }
+
+        // Render Functions
+        function renderChart(canvasId, data, label, color, options = {}) {
+            destroyChart(canvasId);
+            const ctx = document.getElementById(canvasId).getContext('2d');
+            const colors = getChartColors();
+            const config = getCommonConfig(colors);
+
+            if (options.logScale) config.scales.y.type = 'logarithmic';
+
+            charts[canvasId] = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: data.epochs,
+                    datasets: [{
+                        label: label,
+                        data: data.values,
+                        borderColor: color,
+                        backgroundColor: color + '33', // 20% opacity
+                        borderWidth: 2,
+                        pointRadius: 0,
+                        tension: 0.1
+                    }]
+                },
+                options: config
+            });
+        }
+
+        function renderRewardChart(canvasId, data) {
+            destroyChart(canvasId);
+            const ctx = document.getElementById(canvasId).getContext('2d');
+            const colors = getChartColors();
+            const config = getCommonConfig(colors);
+            config.plugins.legend = { display: true, labels: { color: colors.text } };
+
+            // Create upper and lower bounds for the standard deviation area
+            const rewardUpper = data.reward_mean.map((v, i) => v + data.reward_std[i]);
+            const rewardLower = data.reward_mean.map((v, i) => v - data.reward_std[i]);
+
+            charts[canvasId] = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: data.epochs,
+                    datasets: [
+                        {
+                            label: 'Reward',
+                            data: data.reward_mean,
+                            borderColor: '#4ade80',
+                            backgroundColor: '#4ade80',
+                            borderWidth: 2,
+                            pointRadius: 0,
+                            tension: 0.1,
+                            zIndex: 10
+                        },
+                        {
+                            label: 'Reward Std Dev',
+                            data: rewardUpper,
+                            borderColor: 'transparent',
+                            backgroundColor: '#4ade8033', // Translucent Green
+                            pointRadius: 0,
+                            fill: '+1', // Fill to the next dataset (which is lower bound)
+                            tension: 0.1
+                        },
+                        {
+                            label: 'Reward Std Dev Lower',
+                            data: rewardLower,
+                            borderColor: 'transparent',
+                            backgroundColor: 'transparent',
+                            pointRadius: 0,
+                            fill: false,
+                            tension: 0.1
+                        },
+                        {
+                            label: 'Syntax Reward',
+                            data: data.syntax_reward_mean,
+                            borderColor: '#60a5fa',
+                            borderWidth: 2,
+                            pointRadius: 0,
+                            tension: 0.1
+                        }
+                    ]
+                },
+                options: config
+            });
+        }
+
+        function renderCharts(data) {
+            renderChart('lossChart', { epochs: data.epochs, values: data.loss }, 'Loss', '#f472b6');
+            renderChart('gradChart', { epochs: data.epochs, values: data.grad }, 'Grad', '#fb923c');
+            renderChart('lrChart', { epochs: data.epochs, values: data.lr }, 'LR', '#a78bfa', { logScale: true });
+            renderChart('entropyChart', { epochs: data.epochs, values: data.entropy }, 'Entropy', '#22d3d1');
+            renderRewardChart('rewardChart', data);
+            renderChart('fracZeroChart', { epochs: data.epochs, values: data.frac_zero_std }, 'Frac Zero Std', '#fbbf24');
+        }
+
+        async function loadData() {
+            try {
+                const response = await fetch('/api/data');
+                const data = await response.json();
+
+                if (data.error) throw new Error(data.error);
+
+                currentData = data;
+                document.getElementById('timestamp').textContent = new Date().toLocaleString();
+                renderCharts(data);
+
+            } catch (err) {
+                document.body.innerHTML = `<div class="error">Error loading data: ${err.message}</div>`;
+            }
+        }
+
+        loadData();
+    </script>
+</body>
+</html>
