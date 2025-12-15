@@ -1,8 +1,11 @@
+import atexit
+import os
 import re
 import subprocess
 import tempfile
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
-from typing import Callable, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from logger import RewardLogger, log_reward_entries
 
@@ -10,6 +13,21 @@ FUNCTION_DEF_RE = re.compile(r"\blet\s+[a-zA-Z0-9_']+\s*(?:\([^)]*\))?\s*=", re.
 MIN_NON_EMPTY_LINES = 8
 CODE_BLOCK_RE = re.compile(r"```(.*?)```", re.DOTALL)
 LANGUAGE_HINTS = {"ocaml", "ml", "code", "language", "language:ocaml"}
+
+# Default zero-reward result template
+REWARDS_ZERO: Dict[str, Any] = {
+    "total_reward": 0.0,
+    "base_reward": 0.0,
+    "type_score": 0.0,
+    "compile_score": 0.0,
+    "test_score": 0.0,
+    "syntax_errors": None,
+    "error_details": None,
+    "prose_penalty_applied": False,
+    "is_degenerate": False,
+    "timeout_stage": None,
+    "passed": False,
+}
 
 
 class RewardEvaluator:
@@ -97,6 +115,12 @@ def make_syntax_aware_reward(evaluator, logger):
     high failure rates. Prose penalty is secondary (guardrail), not primary driver.
     """
 
+    max_workers = int(os.environ.get("REWARD_POOL_SIZE", "0"))
+    pool: ProcessPoolExecutor | None = None
+    if max_workers > 1:
+        pool = ProcessPoolExecutor(max_workers=max_workers)
+        atexit.register(pool.shutdown, wait=True)
+
     def reward_func(
         prompts: List[str],
         completions: List[str],
@@ -110,257 +134,55 @@ def make_syntax_aware_reward(evaluator, logger):
         detailed_logs = []
         completion_logs = []
 
-        # Track pass rates per problem for this batch
-        problem_passes: Dict[str, List[bool]] = {}
-
+        if pool:
+            jobs = []
+            for idx, completion in enumerate(completions):
+                pid = ids[idx] if idx < len(ids) else f"sample_{idx}"
+                tests = tests_list[idx] if idx < len(tests_list) else ""
+                jobs.append(pool.submit(_score_completion, pid, completion, tests))
         for idx, completion in enumerate(completions):
             pid = ids[idx] if idx < len(ids) else f"sample_{idx}"
             tests = tests_list[idx] if idx < len(tests_list) else ""
 
-            # Initialize tracking for this problem if needed
-            if pid not in problem_passes:
-                problem_passes[pid] = []
-
-            # === STAGE 1: Code Extraction and Validation ===
-            code = extract_code_block(completion)
-
-            # Gate: Must have minimal code (check BEFORE giving any reward)
-            if not code or count_non_empty_code_lines(completion) < MIN_NON_EMPTY_LINES:
-                rewards.append(0.0)
-                detailed_logs.append(
-                    {
-                        "problem_id": pid,
-                        "total_reward": 0.0,
-                        "type_check": 0.0,
-                        "compile": 0.0,
-                        "tests": 0.0,
-                        "syntax_errors": None,
-                        "failure_reason": "insufficient_code",
-                        "preview": completion[:200],
-                    }
-                )
-                completion_logs.append(
-                    {
-                        "problem_id": pid,
-                        "reward": 0.0,
-                        "length": len(completion),
-                        "completion": completion,
-                    }
-                )
-                # Failed generation -> did not pass
-                problem_passes[pid].append(False)
-                continue
-
-            # === STAGE 2: Syntax-Aware Type Checking (25%) - STRENGTHENED ===
-            # Combine solution with pre-defined tests
-            combined_code = f"{code.rstrip()}\n\n{tests.strip()}\n"
-
-            with tempfile.TemporaryDirectory(prefix=f"{pid}_reward_") as tmpdir_str:
-                tmpdir = Path(tmpdir_str)
-                source_path = tmpdir / f"{pid}.ml"
-                source_path.write_text(combined_code, encoding="utf-8")
-
-                # Run OCaml type checker
-                timeout_stage = None
-                try:
-                    type_result = subprocess.run(
-                        ["ocamlc", "-c", source_path.name],
-                        cwd=tmpdir,
-                        capture_output=True,
-                        text=True,
-                        timeout=5,
-                    )
-                except (subprocess.TimeoutExpired, Exception) as e:
-                    # Type check timed out or failed - log and treat as complete failure
-                    timeout_stage = "type_check"
-                    print(f"[WARNING] Type check failed for problem {pid}: {type(e).__name__}")
-                    type_score = 0.0
-                    syntax_errors = None
-                    error_details = f"[{type(e).__name__}] Type check failed"
-                    compile_score = 0.0
-                    compile_succeeded = False
-                    test_score = 0.0
-                    has_syntax_error = False  # For compilation stage reference
-
-                if timeout_stage != "type_check":
-                    if type_result.returncode == 0:
-                        # Perfect - no syntax or type errors
-                        type_score = 0.25
-                        syntax_errors = 0
-                        error_details = "success"
-                    else:
-                        # Parse stderr to distinguish SYNTAX errors from TYPE errors
-                        # This is critical: syntax errors = unparseable garbage, type errors = semantic mistakes
-                        stderr = type_result.stderr
-
-                        # Check for syntax errors FIRST - they indicate fundamentally broken code
-                        # Common OCaml syntax error patterns:
-                        # - "Syntax error" (general parse failure)
-                        # - "Illegal character" (invalid tokens like markdown ```)
-                        # - "Unbound" can be type OR syntax depending on context
-                        has_syntax_error = bool(
-                            re.search(
-                                r"Syntax error|Illegal character|unexpected token|Unterminated|"
-                                r"This '.*' might be unmatched",
-                                stderr,
-                                re.IGNORECASE,
-                            )
-                        )
-
-                        error_count = len(re.findall(r"\bError:", stderr))
-
-                        if has_syntax_error:
-                            # Syntax errors get ZERO type credit - the code is unparseable
-                            # This prevents reward hacking via markdown blocks, escape chars, etc.
-                            type_score = 0.0
-                            syntax_errors = error_count
-                            error_details = f"[SYNTAX ERROR] {stderr[:300]}"
-                        else:
-                            # Only TYPE errors (semantically incorrect but syntactically valid)
-                            # These get graduated partial credit because they show understanding
-                            # Graduated rewards based on error count (STRENGTHENED)
-                            # Larger gaps between levels to create stronger gradient
-                            if error_count == 0:
-                                type_score = 0.0
-                            elif error_count == 1:
-                                type_score = 0.20  # 80% credit - very close!
-                            elif error_count == 2:
-                                type_score = 0.15  # 60% credit
-                            elif error_count == 3:
-                                type_score = 0.10  # 40% credit
-                            elif error_count == 4:
-                                type_score = 0.05  # 20% credit
-                            else:
-                                type_score = 0.02  # 8% credit for trying
-
-                            syntax_errors = 0  # No syntax errors, only type errors
-                            error_details = f"[TYPE ERRORS: {error_count}] {stderr[:250]}"
-
-                # === STAGE 3: Compilation (10%) - always attempt ===
-                # Key change: We ALWAYS try to compile, even with type errors
-                # This gives the model gradient signal for "almost compiling"
-                if timeout_stage != "type_check":
-                    compile_score = 0.0
-                    compile_succeeded = False
-
-                    compile_result = subprocess.run(
-                        ["ocamlc", "-o", pid, source_path.name],
-                        cwd=tmpdir,
-                        capture_output=True,
-                        text=True,
-                        timeout=10,
-                    )
-
-                    if compile_result.returncode == 0:
-                        # Perfect compilation
-                        compile_score = 0.10
-                        compile_succeeded = True
-                    elif type_result.returncode == 0:
-                        # Type checked perfectly but compilation failed
-                        # This is closer to success than having type errors
-                        # Give substantial partial credit to bridge the gap
-                        compile_score = 0.05
-                    elif has_syntax_error:
-                        # Syntax errors get ZERO compile credit
-                        # This prevents any reward for unparseable garbage
-                        compile_score = 0.0
-                    else:
-                        # Had TYPE errors (not syntax) and compilation failed
-                        # Give tiny credit for attempting valid structure
-                        compile_score = 0.01
-
-                # === STAGE 4: Test Execution (65%) - GRADUATED ===
-                # Changed from all-or-nothing to graduated for smoother reward landscape
-                if timeout_stage != "type_check":
-                    test_score = 0.0
-                    tests_passed = 0
-                    total_tests = 1  # Default assumption
-
-                    if compile_succeeded:
-                        exec_path = tmpdir / pid
-                        try:
-                            test_result = subprocess.run(
-                                [f"./{pid}"], cwd=tmpdir, capture_output=True, text=True, timeout=30
-                            )
-                            if test_result.returncode == 0:
-                                # All tests passed
-                                test_score = 0.65
-                                tests_passed = total_tests
-                            # Note: We could parse test output to count partial passes,
-                            # but for now, OCaml test executables return 0 (all pass) or non-zero (some fail)
-                            # Future enhancement: Parse assertion failures to give partial credit
-                        except subprocess.TimeoutExpired:
-                            timeout_stage = "tests"
-                            print(f"[WARNING] Test execution timeout for problem {pid}")
-                            test_score = 0.0
-
-            # === Final Reward Calculation ===
-            base_reward = type_score + compile_score + test_score
-
-            # === Prose/Degenerate Output Penalty (0.3 multiplier) ===
-            # Multi-signal detection prevents simple reward hacking
-            is_degenerate = is_degenerate_output(completion, code)
-            if is_degenerate:
-                total_reward = base_reward * 0.3  # 70% penalty (guardrail, not dominant signal)
-                prose_penalty_applied = True
+            if pool:
+                result = jobs[idx].result()
             else:
-                total_reward = base_reward
-                prose_penalty_applied = False
+                result = _score_completion(pid, completion, tests)
 
-            rewards.append(total_reward)
-
-            # Record success for metrics
-            # We define "passing" as getting full credit on tests (0.65)
-            # This aligns with Pass@k definition (functional correctness)
-            passed = test_score >= 0.65
-            problem_passes[pid].append(passed)
-
-            # Detailed logging
-            log_entry = {
-                "problem_id": pid,
-                "total_reward": float(total_reward),
-                "base_reward": float(base_reward),
-                "type_check": float(type_score),
-                "compile": float(compile_score),
-                "tests": float(test_score),
-                "syntax_errors": syntax_errors if "syntax_errors" in locals() else None,
-                "error_sample": error_details if "error_details" in locals() else None,
-                "prose_penalty_applied": prose_penalty_applied,
-                "is_degenerate": is_degenerate,
-                "preview": completion[:200],
-            }
-            if timeout_stage:
-                log_entry["timeout_stage"] = timeout_stage
-            detailed_logs.append(log_entry)
-
-            completion_log_entry = {
-                "problem_id": pid,
-                "reward": float(total_reward),
-                "base_reward": float(base_reward),
-                "length": len(completion),
-                "prose_penalty_applied": prose_penalty_applied,
-                "completion": completion,
-            }
-            if timeout_stage:
-                completion_log_entry["timeout_stage"] = timeout_stage
-            completion_logs.append(completion_log_entry)
-
-        # === Compute Batch-Level Metrics ===
-        if logger and problem_passes:
-            # Calculate Pass@1 (mean accuracy per problem, then averaged)
-            pass_1_scores = [sum(p) / len(p) for p in problem_passes.values()]
-            batch_pass_1 = sum(pass_1_scores) / len(pass_1_scores) if pass_1_scores else 0.0
-
-            # Calculate Pass@All (at least one success per problem)
-            pass_all_scores = [1.0 if any(p) else 0.0 for p in problem_passes.values()]
-            batch_pass_all = sum(pass_all_scores) / len(pass_all_scores) if pass_all_scores else 0.0
-
-            logger.log_metrics(
+            rewards.append(float(result["total_reward"]))
+            detailed_logs.append(
                 {
-                    "pass_at_1": batch_pass_1,
-                    "pass_at_all": batch_pass_all,
-                    "batch_size": len(completions),
-                    "num_problems": len(problem_passes),
+                    "problem_id": pid,
+                    "total_reward": float(result["total_reward"]),
+                    "base_reward": float(result["base_reward"]),
+                    "type_check": float(result["type_score"]),
+                    "compile": float(result["compile_score"]),
+                    "tests": float(result["test_score"]),
+                    "syntax_errors": result.get("syntax_errors"),
+                    "error_sample": result.get("error_details"),
+                    "prose_penalty_applied": result["prose_penalty_applied"],
+                    "is_degenerate": result["is_degenerate"],
+                    "preview": completion[:200],
+                    **(
+                        {"timeout_stage": result["timeout_stage"]}
+                        if result["timeout_stage"]
+                        else {}
+                    ),
+                }
+            )
+            completion_logs.append(
+                {
+                    "problem_id": pid,
+                    "reward": float(result["total_reward"]),
+                    "base_reward": float(result["base_reward"]),
+                    "length": len(completion),
+                    "prose_penalty_applied": result["prose_penalty_applied"],
+                    "completion": completion,
+                    **(
+                        {"timeout_stage": result["timeout_stage"]}
+                        if result["timeout_stage"]
+                        else {}
+                    ),
                 }
             )
 
@@ -395,7 +217,7 @@ def score_has_function_definition(completion: str) -> float:
     return 1.0 if FUNCTION_DEF_RE.search(code) else 0.0
 
 
-def run_subprocess(cmd: List[str], workdir: Path) -> Tuple[bool, str]:
+def run_subprocess(cmd: List[str], workdir: Path, timeout: int = 30) -> Tuple[bool, str]:
     """Execute an OCaml tool and return success plus logs for debugging rewards."""
     try:
         proc = subprocess.run(
@@ -403,7 +225,10 @@ def run_subprocess(cmd: List[str], workdir: Path) -> Tuple[bool, str]:
             cwd=workdir,
             capture_output=True,
             text=True,
+            timeout=timeout,
         )
+    except subprocess.TimeoutExpired:
+        return False, f"{cmd[0]} timed out after {timeout}s"
     except FileNotFoundError as exc:
         return False, f"{cmd[0]} command not found: {exc}"
 
@@ -479,6 +304,187 @@ def make_reward_function(
     return reward_func
 
 
+# Type check, compile, and test scoring helpers
+
+
+def prepare_source_file(
+    pid: str, completion: str, tests: str, tmpdir: Path
+) -> Tuple[Optional[Path], Optional[str]]:
+    """Extract code and write to temp file. Returns (source_path, code) or (None, None) if invalid."""
+    code = extract_code_block(completion)
+    if not code or count_non_empty_code_lines(completion) < MIN_NON_EMPTY_LINES:
+        return None, None
+
+    combined_code = f"{code.rstrip()}\n\n{tests.strip()}\n"
+    source_path = tmpdir / f"{pid}.ml"
+    source_path.write_text(combined_code, encoding="utf-8")
+    return source_path, code
+
+
+def apply_degenerate_penalty(
+    base_reward: float, completion: str, code: str
+) -> Tuple[float, bool]:
+    """Apply prose penalty if output is degenerate. Returns (total_reward, penalty_applied)."""
+    is_degenerate = is_degenerate_output(completion, code)
+    if is_degenerate:
+        return base_reward * 0.3, True
+    return base_reward, False
+
+
+def get_type_check_score(source_path: Path, tmpdir: Path) -> Dict[str, Any]:
+    """Run OCaml type check and return graduated score based on error count."""
+    try:
+        result = subprocess.run(
+            ["ocamlc", "-c", source_path.name],
+            cwd=tmpdir,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "score": 0.0,
+            "syntax_errors": None,
+            "error_details": "[TimeoutExpired] Type check failed",
+            "has_syntax_error": False,
+            "timed_out": True,
+        }
+    except Exception as exc:
+        return {
+            "score": 0.0,
+            "syntax_errors": None,
+            "error_details": f"[{type(exc).__name__}] Type check failed",
+            "has_syntax_error": False,
+            "timed_out": True,
+        }
+
+    if result.returncode == 0:
+        return {
+            "score": 0.25,
+            "syntax_errors": 0,
+            "error_details": "success",
+            "has_syntax_error": False,
+            "timed_out": False,
+        }
+
+    stderr = result.stderr
+    has_syntax_error = bool(
+        re.search(
+            r"Syntax error|Illegal character|unexpected token|Unterminated|"
+            r"This '.*' might be unmatched",
+            stderr,
+            re.IGNORECASE,
+        )
+    )
+    error_count = len(re.findall(r"\bError:", stderr))
+
+    if has_syntax_error:
+        return {
+            "score": 0.0,
+            "syntax_errors": error_count,
+            "error_details": f"[SYNTAX ERROR] {stderr[:300]}",
+            "has_syntax_error": True,
+            "timed_out": False,
+        }
+
+    # Graduate type error scores: 1->0.20, 2->0.15, 3->0.10, 4->0.05, 5+->0.02
+    score_map = {0: 0.0, 1: 0.20, 2: 0.15, 3: 0.10, 4: 0.05}
+    score = score_map.get(error_count, 0.02)
+
+    return {
+        "score": score,
+        "syntax_errors": 0,
+        "error_details": f"[TYPE ERRORS: {error_count}] {stderr[:250]}",
+        "has_syntax_error": False,
+        "timed_out": False,
+    }
+
+
+def get_compile_score(
+    source_path: Path, tmpdir: Path, pid: str, type_check: Dict[str, Any]
+) -> float:
+    """Run OCaml compilation and return score based on success and type check state."""
+    if type_check["timed_out"]:
+        return 0.0
+
+    try:
+        result = subprocess.run(
+            ["ocamlc", "-o", pid, source_path.name],
+            cwd=tmpdir,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (subprocess.TimeoutExpired, Exception):
+        return 0.0
+
+    if result.returncode == 0:
+        return 0.10
+    elif type_check["score"] == 0.25:  # Perfect type check
+        return 0.05
+    elif type_check["has_syntax_error"]:
+        return 0.0
+    else:
+        return 0.01
+
+
+def get_test_score(tmpdir: Path, pid: str, compile_succeeded: bool) -> Tuple[float, Optional[str]]:
+    """Run compiled executable and return test score and timeout stage if any."""
+    if not compile_succeeded:
+        return 0.0, None
+
+    try:
+        result = subprocess.run(
+            [f"./{pid}"],
+            cwd=tmpdir,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        return (0.65 if result.returncode == 0 else 0.0), None
+    except subprocess.TimeoutExpired:
+        return 0.0, "tests"
+
+
+def _score_completion(
+    pid: str, completion: str, tests: str
+) -> Dict[str, float | str | bool | None]:
+    with tempfile.TemporaryDirectory(prefix=f"{pid}_reward_") as tmpdir_str:
+        tmpdir = Path(tmpdir_str)
+        source_path, code = prepare_source_file(pid, completion, tests, tmpdir)
+
+        if source_path is None:
+            return {"problem_id": pid, **REWARDS_ZERO}
+
+        # Run type check, compile, and tests
+        type_check = get_type_check_score(source_path, tmpdir)
+        compile_score = get_compile_score(source_path, tmpdir, pid, type_check)
+        compile_succeeded = compile_score == 0.10
+        test_score, test_timeout = get_test_score(tmpdir, pid, compile_succeeded)
+
+    # Determine timeout stage
+    timeout_stage = "type_check" if type_check["timed_out"] else test_timeout
+
+    # Calculate rewards
+    base_reward = type_check["score"] + compile_score + test_score
+    total_reward, prose_penalty_applied = apply_degenerate_penalty(base_reward, completion, code)
+
+    return {
+        "problem_id": pid,
+        "total_reward": float(total_reward),
+        "base_reward": float(base_reward),
+        "type_score": float(type_check["score"]),
+        "compile_score": float(compile_score),
+        "test_score": float(test_score),
+        "syntax_errors": type_check["syntax_errors"],
+        "error_details": type_check["error_details"],
+        "prose_penalty_applied": prose_penalty_applied,
+        "is_degenerate": prose_penalty_applied,
+        "timeout_stage": timeout_stage,
+        "passed": bool(test_score >= 0.65),
+    }
+
+
 def extract_code_block(text: str) -> str:
     """Strip markdown fences so only runnable OCaml reaches the evaluator."""
     matches = CODE_BLOCK_RE.findall(text.strip())
@@ -500,7 +506,7 @@ def extract_code_block(text: str) -> str:
 def is_degenerate_output(completion: str, code: str) -> bool:
     """
     Multi-signal detection for degenerate outputs (prose, gibberish, spam).
-    Returns True if output appears degenerate. Requires 2+ signals to avoid false positives.
+    Returns True if output appears degenerate (1+ signals detected).
 
     This function detects:
     - Natural language prose (conversational patterns)
@@ -564,5 +570,5 @@ def is_degenerate_output(completion: str, code: str) -> bool:
     if code_block_count > 4:  # More than 2 code block pairs
         issues += 1
 
-    # Require 1+ signals to trigger penalty (reduces false positives)
+    # Require 1+ signals to trigger penalty
     return issues >= 1

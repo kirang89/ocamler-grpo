@@ -5,6 +5,14 @@ import sys
 import textwrap
 from pathlib import Path
 
+from datasets import Dataset, load_dataset
+from peft import LoraConfig, TaskType
+from transformers import AutoTokenizer, TrainerCallback
+from trl import GRPOConfig, GRPOTrainer
+
+from logger import RewardLogger, log_learning_metrics
+from reward import RewardEvaluator, build_reward_functions
+
 
 def _ensure_cuda_driver():
     """
@@ -35,13 +43,6 @@ def _ensure_cuda_driver():
 _ensure_cuda_driver()
 
 import torch
-from datasets import Dataset, load_dataset
-from peft import LoraConfig, TaskType
-from transformers import AutoTokenizer, TrainerCallback
-from trl import GRPOConfig, GRPOTrainer
-
-from logger import RewardLogger, log_learning_metrics
-from reward import RewardEvaluator, build_reward_functions
 
 PROMPT_TEMPLATE = textwrap.dedent(
     """
@@ -211,7 +212,8 @@ def create_grpo_config(temperature=None) -> GRPOConfig:
         gradient_checkpointing=False,
         eval_strategy="no",
         save_steps=100,
-        dataloader_num_workers=4,  # Use CPU cores
+        dataloader_num_workers=8,  # Use CPU cores
+        dataloader_persistent_workers=True,
         dataloader_pin_memory=True,
         beta=beta,
         top_entropy_quantile=top_entropy_quantile,  # Focus training on high-entropy tokens
@@ -266,10 +268,13 @@ def main():
     dataset = build_training_dataset(TRAINING_DATASET)
     tokenizer = create_tokenizer(model_id)
     evaluator = RewardEvaluator()
+
     output_path = Path(GRPO_OUTPUT_DIR)
     output_path.mkdir(parents=True, exist_ok=True)
+
     reward_logger = RewardLogger(output_path / "reward_logs")
     reward_funcs = build_reward_functions(evaluator, reward_logger)
+
     config = create_grpo_config()
     lora_config = create_lora_config()
 
