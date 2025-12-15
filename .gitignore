@@ -19,3 +19,7 @@ metrics.csv
 
 # Log files
 *.log
+
+# Training Data
+grpo_runs/
+data/
