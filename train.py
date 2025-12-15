@@ -9,7 +9,7 @@ import sys
 import tempfile
 import textwrap
 from pathlib import Path
-from typing import Callable, Dict, List, Tuple, Any
+from typing import Any, Callable, Dict, List, Tuple
 
 from transformers import TrainerCallback
 
@@ -451,6 +451,7 @@ def is_degenerate_output(completion: str, code: str) -> bool:
     - Low OCaml keyword density (gibberish)
     - Repetitive patterns (spam)
     - Low code purity (too much wrapper text)
+    - Markdown code block spam (too many ``` markers)
     """
     issues = 0
 
@@ -473,10 +474,9 @@ def is_degenerate_output(completion: str, code: str) -> bool:
 
     # Signal 2: Low OCaml keyword density (indicates gibberish)
     if code:
-        keywords = len(re.findall(
-            r'\b(let|match|with|if|then|else|fun|rec|type|val|module|open|in)\b',
-            code
-        ))
+        keywords = len(
+            re.findall(r"\b(let|match|with|if|then|else|fun|rec|type|val|module|open|in)\b", code)
+        )
         code_tokens = len(code.split())
         keyword_density = keywords / code_tokens if code_tokens > 0 else 0
 
@@ -486,7 +486,7 @@ def is_degenerate_output(completion: str, code: str) -> bool:
     # Signal 3: Highly repetitive content (spam patterns)
     if len(completion) > 100:
         # Check for repeated 50-char chunks
-        chunks = [completion[i:i+50] for i in range(0, len(completion)-50, 25)]
+        chunks = [completion[i : i + 50] for i in range(0, len(completion) - 50, 25)]
         if chunks:
             unique_chunks = len(set(chunks))
             repetition_ratio = unique_chunks / len(chunks) if chunks else 1.0
@@ -501,8 +501,15 @@ def is_degenerate_output(completion: str, code: str) -> bool:
         if code_purity < 0.5:  # Less than half is actual code
             issues += 1
 
-    # Require 2+ signals to trigger penalty (reduces false positives)
-    return issues >= 2
+    # Signal 5: Markdown code block spam (too many ``` markers)
+    code_block_count = completion.count("```")
+    # Each code block has 2 markers (opening and closing), so count pairs
+    # Legitimate completions should have at most 1-2 code blocks (2-4 markers)
+    if code_block_count > 4:  # More than 2 code block pairs
+        issues += 1
+
+    # Require 1+ signals to trigger penalty (reduces false positives)
+    return issues >= 1
 
 
 def make_syntax_aware_reward(evaluator, logger):
