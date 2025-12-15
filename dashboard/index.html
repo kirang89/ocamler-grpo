@@ -99,6 +99,46 @@
             text-align: center;
             padding: 40px;
         }
+        .params-container {
+            width: 100%;
+            max-width: 1800px; /* Consistent with other main containers like .grid */
+            margin: 40px auto;
+            background: var(--card-bg);
+            padding: 20px;
+            border-radius: 12px;
+            border: 1px solid var(--grid-color);
+            transition: background-color 0.3s;
+        }
+        .params-container h3 {
+            margin: 0 0 15px 0;
+            text-align: center;
+            font-size: 1.1rem;
+            color: var(--chart-title-color);
+            font-weight: 500;
+        }
+        .params-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-family: monospace;
+            font-size: 0.9rem;
+        }
+        .params-table td {
+            padding: 8px 12px;
+            border-bottom: 1px solid var(--grid-color);
+        }
+        .params-table tr:last-child td {
+            border-bottom: none;
+        }
+        .param-key {
+            text-align: right;
+            width: 40%;
+            font-weight: 600;
+            color: var(--subtitle-color);
+        }
+        .param-value {
+            text-align: left;
+            color: var(--text-color);
+        }
     </style>
 </head>
 <body>
@@ -136,7 +176,17 @@
             <div class="chart-title">Fraction Zero Std</div>
             <canvas id="fracZeroChart"></canvas>
         </div>
+        <div class="chart-card">
+            <div class="chart-title">Pass@1 (per batch)</div>
+            <canvas id="pass1Chart"></canvas>
+        </div>
+        <div class="chart-card">
+            <div class="chart-title">Pass@All (per batch)</div>
+            <canvas id="passAllChart"></canvas>
+        </div>
     </div>
+
+    <div id="trainingParams" class="params-container" style="display: none;">Loading parameters...</div>
 
     <script>
         // State
@@ -201,6 +251,29 @@
                 charts[id].destroy();
                 delete charts[id];
             }
+        }
+
+        function renderParams(params) {
+            const container = document.getElementById('trainingParams');
+            if (!params) {
+                container.style.display = 'none';
+                return;
+            }
+            
+            const rows = Object.entries(params).map(([key, value]) => `
+                <tr>
+                    <td class="param-key">${key}</td>
+                    <td class="param-value">${value}</td>
+                </tr>
+            `).join('');
+            
+            container.innerHTML = `
+                <h3>Training Configuration</h3>
+                <table class="params-table">
+                    <tbody>${rows}</tbody>
+                </table>
+            `;
+            container.style.display = 'block';
         }
 
         // Render Functions
@@ -295,6 +368,18 @@
             renderChart('entropyChart', { epochs: data.epochs, values: data.entropy }, 'Entropy', '#22d3d1');
             renderRewardChart('rewardChart', data);
             renderChart('fracZeroChart', { epochs: data.epochs, values: data.frac_zero_std }, 'Frac Zero Std', '#fbbf24');
+            renderChart(
+                'pass1Chart',
+                { epochs: data.pass_metrics.steps, values: data.pass_metrics.pass_at_1 },
+                'Pass@1',
+                '#34d399'
+            );
+            renderChart(
+                'passAllChart',
+                { epochs: data.pass_metrics.steps, values: data.pass_metrics.pass_at_all },
+                'Pass@All',
+                '#f59e0b'
+            );
         }
 
         async function loadData() {
@@ -304,6 +389,9 @@
 
                 if (data.error) throw new Error(data.error);
 
+                if (!data.pass_metrics) {
+                    data.pass_metrics = { steps: [], pass_at_1: [], pass_at_all: [] };
+                }
                 currentData = data;
                 document.getElementById('timestamp').textContent = new Date().toLocaleString();
                 if (data.latest_epoch !== null && data.latest_epoch !== undefined) {
@@ -311,6 +399,11 @@
                 } else {
                     document.getElementById('epochNumber').textContent = 'N/A';
                 }
+                
+                if (data.training_params) {
+                    renderParams(data.training_params);
+                }
+
                 renderCharts(data);
 
             } catch (err) {

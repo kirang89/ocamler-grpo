@@ -9,7 +9,7 @@ import sys
 import tempfile
 import textwrap
 from pathlib import Path
-from typing import Callable, Dict, List, Tuple
+from typing import Callable, Dict, List, Tuple, Any
 
 from transformers import TrainerCallback
 
@@ -170,11 +170,17 @@ class RewardLogger:
         self.base_dir = base_dir
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
-    def log(self, reward_name: str, entries: List[Dict[str, str]]) -> None:
+    def log(self, reward_name: str, entries: List[Dict[str, Any]]) -> None:
         path = self.base_dir / f"{reward_name}.jsonl"
         with path.open("a", encoding="utf-8") as handle:
             for entry in entries:
                 handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+    def log_metrics(self, metrics: Dict[str, float]) -> None:
+        """Logs batch-level metrics to a specific file."""
+        path = self.base_dir / "batch_metrics.jsonl"
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(metrics, ensure_ascii=False) + "\n")
 
 
 def log_learning_metrics(log_path: Path, metrics: Dict) -> None:
@@ -544,9 +550,16 @@ def make_syntax_aware_reward(evaluator, logger):
         detailed_logs = []
         completion_logs = []
 
+        # Track pass rates per problem for this batch
+        problem_passes: Dict[str, List[bool]] = {}
+
         for idx, completion in enumerate(completions):
             pid = ids[idx] if idx < len(ids) else f"sample_{idx}"
             tests = tests_list[idx] if idx < len(tests_list) else ""
+
+            # Initialize tracking for this problem if needed
+            if pid not in problem_passes:
+                problem_passes[pid] = []
 
             # === STAGE 1: Code Extraction and Validation ===
             code = extract_code_block(completion)
@@ -574,6 +587,8 @@ def make_syntax_aware_reward(evaluator, logger):
                         "completion": completion,
                     }
                 )
+                # Failed generation -> did not pass
+                problem_passes[pid].append(False)
                 continue
 
             # === STAGE 2: Syntax-Aware Type Checking (25%) - STRENGTHENED ===
@@ -595,32 +610,55 @@ def make_syntax_aware_reward(evaluator, logger):
                 )
 
                 if type_result.returncode == 0:
-                    # Perfect - no syntax errors
+                    # Perfect - no syntax or type errors
                     type_score = 0.25
                     syntax_errors = 0
                     error_details = "success"
                 else:
-                    # Count syntax errors in stderr
+                    # Parse stderr to distinguish SYNTAX errors from TYPE errors
+                    # This is critical: syntax errors = unparseable garbage, type errors = semantic mistakes
                     stderr = type_result.stderr
+
+                    # Check for syntax errors FIRST - they indicate fundamentally broken code
+                    # Common OCaml syntax error patterns:
+                    # - "Syntax error" (general parse failure)
+                    # - "Illegal character" (invalid tokens like markdown ```)
+                    # - "Unbound" can be type OR syntax depending on context
+                    has_syntax_error = bool(re.search(
+                        r"Syntax error|Illegal character|unexpected token|Unterminated|"
+                        r"This '.*' might be unmatched",
+                        stderr,
+                        re.IGNORECASE
+                    ))
+
                     error_count = len(re.findall(r"\bError:", stderr))
 
-                    # Graduated rewards based on error count (STRENGTHENED)
-                    # Larger gaps between levels to create stronger gradient
-                    if error_count == 0:
+                    if has_syntax_error:
+                        # Syntax errors get ZERO type credit - the code is unparseable
+                        # This prevents reward hacking via markdown blocks, escape chars, etc.
                         type_score = 0.0
-                    elif error_count == 1:
-                        type_score = 0.20  # 80% credit - very close!
-                    elif error_count == 2:
-                        type_score = 0.15  # 60% credit
-                    elif error_count == 3:
-                        type_score = 0.10  # 40% credit
-                    elif error_count == 4:
-                        type_score = 0.05  # 20% credit
+                        syntax_errors = error_count
+                        error_details = f"[SYNTAX ERROR] {stderr[:300]}"
                     else:
-                        type_score = 0.02  # 8% credit for trying
+                        # Only TYPE errors (semantically incorrect but syntactically valid)
+                        # These get graduated partial credit because they show understanding
+                        # Graduated rewards based on error count (STRENGTHENED)
+                        # Larger gaps between levels to create stronger gradient
+                        if error_count == 0:
+                            type_score = 0.0
+                        elif error_count == 1:
+                            type_score = 0.20  # 80% credit - very close!
+                        elif error_count == 2:
+                            type_score = 0.15  # 60% credit
+                        elif error_count == 3:
+                            type_score = 0.10  # 40% credit
+                        elif error_count == 4:
+                            type_score = 0.05  # 20% credit
+                        else:
+                            type_score = 0.02  # 8% credit for trying
 
-                    syntax_errors = error_count
-                    error_details = stderr[:300]
+                        syntax_errors = 0  # No syntax errors, only type errors
+                        error_details = f"[TYPE ERRORS: {error_count}] {stderr[:250]}"
 
                 # === STAGE 3: Compilation (10%) - always attempt ===
                 # Key change: We ALWAYS try to compile, even with type errors
@@ -687,6 +725,12 @@ def make_syntax_aware_reward(evaluator, logger):
 
             rewards.append(total_reward)
 
+            # Record success for metrics
+            # We define "passing" as getting full credit on tests (0.65)
+            # This aligns with Pass@k definition (functional correctness)
+            passed = (test_score >= 0.65)
+            problem_passes[pid].append(passed)
+
             # Detailed logging
             detailed_logs.append(
                 {
@@ -714,6 +758,23 @@ def make_syntax_aware_reward(evaluator, logger):
                     "completion": completion,
                 }
             )
+
+        # === Compute Batch-Level Metrics ===
+        if logger and problem_passes:
+            # Calculate Pass@1 (mean accuracy per problem, then averaged)
+            pass_1_scores = [sum(p) / len(p) for p in problem_passes.values()]
+            batch_pass_1 = sum(pass_1_scores) / len(pass_1_scores) if pass_1_scores else 0.0
+
+            # Calculate Pass@All (at least one success per problem)
+            pass_all_scores = [1.0 if any(p) else 0.0 for p in problem_passes.values()]
+            batch_pass_all = sum(pass_all_scores) / len(pass_all_scores) if pass_all_scores else 0.0
+
+            logger.log_metrics({
+                "pass_at_1": batch_pass_1,
+                "pass_at_all": batch_pass_all,
+                "batch_size": len(completions),
+                "num_problems": len(problem_passes)
+            })
 
         if logger:
             logger.log("syntax_aware_breakdown", detailed_logs)

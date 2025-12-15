@@ -94,6 +94,32 @@ The `learning.log` file contains a filtered, human-readable view of the most imp
 - **What it means**: Diversity in OCaml code quality within batch
 - **What to watch for**: Similar to reward_std. Low values may indicate consistency or mode collapse.
 
+### Batch Pass Metrics
+(Logged to `batch_metrics.jsonl`)
+
+#### `pass_at_1`
+- **Type**: Float
+- **Range**: 0.0 to 1.0
+- **Definition**: The average percentage of correct solutions per problem in a batch.
+- **How it's calculated**:
+  1. For each problem in the batch, calculate the fraction of generated solutions that passed all tests.
+     - Example: Problem A has 1/4 correct, Problem B has 2/4 correct.
+  2. Average these fractions across all problems in the batch.
+     - Example: `(0.25 + 0.50) / 2 = 0.375`.
+- **What it means**: The probability that a single generated solution is correct.
+- **What to watch for**: Steady increase indicates the model is getting better at solving problems on the first try.
+
+#### `pass_at_all`
+- **Type**: Float
+- **Range**: 0.0 to 1.0
+- **Definition**: The percentage of problems in a batch that had **at least one** correct solution.
+- **How it's calculated**:
+  1. For each problem, check if *any* of its generated solutions passed all tests.
+  2. Calculate the percentage of problems where this is true.
+     - Example: If Problem A has 1/4 correct (solved) and Problem B has 0/4 correct (unsolved), Pass@All is `0.5` (50%).
+- **What it means**: The model's ability to eventually solve a problem given multiple attempts (`num_generations`).
+- **What to watch for**: This should be higher than Pass@1. If it plateaus while Pass@1 rises, the model might be overfitting to easy problems while failing hard ones.
+
 ### Policy Health Metrics
 
 #### `entropy`
