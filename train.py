@@ -51,9 +51,9 @@ PROMPT_TEMPLATE = textwrap.dedent(
     1. Start with ```ocaml
     2. Write ONLY the OCaml code solution
     3. End with ```
+    4. Do NOT include more than one code fence
     4. Do NOT include ANY text before or after the code fence
     5. Do NOT include explanations, comments outside code, or conversational text
-    6. Do NOT output multiple fenced blocks or other languages. Do not use HTML or other wrappers.
 
     Examples(for instruction only — do NOT copy these into your answer):
 
