@@ -89,13 +89,18 @@ def make_syntax_aware_reward(evaluator, logger):
     Syntax-aware reward function with strengthened graduated rewards and prose penalties.
 
     Reward structure optimized for Qwen2.5-Coder-1.5B with pre-defined tests:
-    - Type checking: 25% with graduated partial credit (STRENGTHENED):
+    - Type checking: 25% with graduated partial credit (GRANULAR):
         * 0 errors (perfect): 0.25 (100%)
         * 1 error: 0.20 (80%)
         * 2 errors: 0.15 (60%)
         * 3 errors: 0.10 (40%)
         * 4 errors: 0.05 (20%)
-        * 5+ errors: 0.02 (8%)
+        * 5 errors: 0.04 (16%)
+        * 6 errors: 0.03 (12%)
+        * 7 errors: 0.025 (10%)
+        * 8 errors: 0.02 (8%)
+        * 9 errors: 0.015 (6%)
+        * 10+ errors: 0.01 (4%)
     - Compilation: 10% with partial credit (ALWAYS attempted):
         * Compiles successfully: 0.10 (100%)
         * Type checks perfectly but fails to compile: 0.05 (50%)
@@ -386,9 +391,21 @@ def get_type_check_score(source_path: Path, tmpdir: Path) -> Dict[str, Any]:
             "timed_out": False,
         }
 
-    # Graduate type error scores: 1->0.20, 2->0.15, 3->0.10, 4->0.05, 5+->0.02
-    score_map = {0: 0.0, 1: 0.20, 2: 0.15, 3: 0.10, 4: 0.05}
-    score = score_map.get(error_count, 0.02)
+    # Graduate type error scores with granular rewards for high error counts
+    # This provides a learning signal even when solutions have many type errors
+    score_map = {
+        0: 0.0,   # Perfect type check handled separately (returns 0.25 early)
+        1: 0.20,  # 1 error: 80% of max type reward
+        2: 0.15,  # 2 errors: 60%
+        3: 0.10,  # 3 errors: 40%
+        4: 0.05,  # 4 errors: 20%
+        5: 0.04,  # 5 errors: 16%
+        6: 0.03,  # 6 errors: 12%
+        7: 0.025, # 7 errors: 10%
+        8: 0.02,  # 8 errors: 8%
+        9: 0.015, # 9 errors: 6%
+    }
+    score = score_map.get(error_count, 0.01)  # 10+ errors: 4%
 
     return {
         "score": score,
