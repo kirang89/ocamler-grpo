@@ -46,28 +46,30 @@ import torch
 
 PROMPT_TEMPLATE = textwrap.dedent(
     """
-    You are an expert OCaml engineer. Read the programming problem below and implement the solution.
-    The problem specifies the function signature - you must use exactly that function name as your entry point.
-    Provide a concise solution without any prose.
+    You are an expert OCaml engineer. Provide a solution to the problem below by following this EXACT format:
 
-    Examples:
+    1. Start with ```ocaml
+    2. Write ONLY the OCaml code solution
+    3. End with ```
+    4. Do NOT include ANY text before or after the code fence
+    5. Do NOT include explanations, comments outside code, or conversational text
+    6. Do NOT output multiple fenced blocks or other languages. Do not use HTML or other wrappers.
+
+    Examples(for instruction only — do NOT copy these into your answer):
 
     Problem: Filter positive numbers from a list
-    Solution:
     ```ocaml
     let filter_positive (numbers : int list) : int list =
       List.filter (fun x -> x > 0) numbers
     ```
 
     Problem: Count occurrences of a character in a string
-    Solution:
     ```ocaml
     let count_char (s : string) (c : char) : int =
       String.fold_left (fun acc ch -> if ch = c then acc + 1 else acc) 0 s
     ```
 
     Problem: Calculate the sum of all elements in a list
-    Solution:
     ```ocaml
     let rec sum_list (lst : int list) : int =
       match lst with

@@ -514,6 +514,9 @@ def is_degenerate_output(completion: str, code: str) -> bool:
     - Low code purity (too much wrapper text)
     - Markdown code block spam (too many ``` markers)
     """
+    if os.environ.get("GRPO_DISABLE_PROSE_PENALTY") == "true":
+        return False
+
     issues = 0
 
     # Signal 1: Conversational prose patterns
