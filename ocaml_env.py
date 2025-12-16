@@ -2,11 +2,20 @@ import os
 import re
 import subprocess
 import tempfile
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
 import verifiers as vf
 from datasets import Dataset, load_dataset
+
+
+@dataclass
+class RewardResult:
+    """Standardized return type for all reward functions."""
+
+    score: float
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 CODE_BLOCK_RE = re.compile(r"```(.*?)```", re.DOTALL)
 LANGUAGE_HINTS = {"ocaml", "ml", "code", "language", "language:ocaml"}
@@ -76,7 +85,7 @@ def count_non_empty_code_lines(code: str) -> int:
 # ============================================================================
 
 
-def type_check_reward(source_path: Path, workdir: Path) -> Dict[str, Any]:
+def type_check_reward(source_path: Path, workdir: Path) -> RewardResult:
     """
     Run OCaml type check and return graduated score based on error count.
 
@@ -103,8 +112,8 @@ def type_check_reward(source_path: Path, workdir: Path) -> Dict[str, Any]:
         workdir: Working directory for compilation
 
     Returns:
-        Dictionary with keys: score, syntax_errors, error_details,
-        has_syntax_error, timed_out
+        RewardResult with score and metadata containing: syntax_errors,
+        error_details, has_syntax_error, timed_out
     """
     try:
         result = subprocess.run(
@@ -115,31 +124,37 @@ def type_check_reward(source_path: Path, workdir: Path) -> Dict[str, Any]:
             timeout=TYPE_CHECK_TIMEOUT,
         )
     except subprocess.TimeoutExpired:
-        return {
-            "score": 0.0,
-            "syntax_errors": None,
-            "error_details": "[TimeoutExpired] Type check failed",
-            "has_syntax_error": False,
-            "timed_out": True,
-        }
+        return RewardResult(
+            score=0.0,
+            metadata={
+                "syntax_errors": None,
+                "error_details": "[TimeoutExpired] Type check failed",
+                "has_syntax_error": False,
+                "timed_out": True,
+            },
+        )
     except Exception as exc:
-        return {
-            "score": 0.0,
-            "syntax_errors": None,
-            "error_details": f"[{type(exc).__name__}] Type check failed",
-            "has_syntax_error": False,
-            "timed_out": True,
-        }
+        return RewardResult(
+            score=0.0,
+            metadata={
+                "syntax_errors": None,
+                "error_details": f"[{type(exc).__name__}] Type check failed",
+                "has_syntax_error": False,
+                "timed_out": True,
+            },
+        )
 
     # Success case - perfect type check
     if result.returncode == 0:
-        return {
-            "score": 0.25,
-            "syntax_errors": 0,
-            "error_details": "success",
-            "has_syntax_error": False,
-            "timed_out": False,
-        }
+        return RewardResult(
+            score=0.25,
+            metadata={
+                "syntax_errors": 0,
+                "error_details": "success",
+                "has_syntax_error": False,
+                "timed_out": False,
+            },
+        )
 
     # Parse errors from stderr
     stderr = result.stderr
@@ -155,13 +170,15 @@ def type_check_reward(source_path: Path, workdir: Path) -> Dict[str, Any]:
 
     # Syntax errors get zero reward
     if has_syntax_error:
-        return {
-            "score": 0.0,
-            "syntax_errors": error_count,
-            "error_details": f"[SYNTAX ERROR] {stderr[:300]}",
-            "has_syntax_error": True,
-            "timed_out": False,
-        }
+        return RewardResult(
+            score=0.0,
+            metadata={
+                "syntax_errors": error_count,
+                "error_details": f"[SYNTAX ERROR] {stderr[:300]}",
+                "has_syntax_error": True,
+                "timed_out": False,
+            },
+        )
 
     # Graduate type error scores with granular rewards for high error counts
     # This provides a learning signal even when solutions have many type errors
@@ -179,18 +196,20 @@ def type_check_reward(source_path: Path, workdir: Path) -> Dict[str, Any]:
     }
     score = score_map.get(error_count, 0.01)  # 10+ errors: 4%
 
-    return {
-        "score": score,
-        "syntax_errors": 0,
-        "error_details": f"[TYPE ERRORS: {error_count}] {stderr[:250]}",
-        "has_syntax_error": False,
-        "timed_out": False,
-    }
+    return RewardResult(
+        score=score,
+        metadata={
+            "syntax_errors": 0,
+            "error_details": f"[TYPE ERRORS: {error_count}] {stderr[:250]}",
+            "has_syntax_error": False,
+            "timed_out": False,
+        },
+    )
 
 
 def compile_reward(
-    source_path: Path, workdir: Path, output_name: str, type_check: Dict[str, Any]
-) -> float:
+    source_path: Path, workdir: Path, output_name: str, type_check: RewardResult
+) -> RewardResult:
     """
     Run OCaml compilation and return score based on success and type check state.
 
@@ -207,13 +226,13 @@ def compile_reward(
         source_path: Path to the .ml source file
         workdir: Working directory for compilation
         output_name: Name for the output executable
-        type_check: Type check result dictionary from type_check_reward()
+        type_check: RewardResult from type_check_reward()
 
     Returns:
-        Compilation score (float)
+        RewardResult with score and metadata containing: timed_out
     """
-    if type_check["timed_out"]:
-        return 0.0
+    if type_check.metadata.get("timed_out"):
+        return RewardResult(score=0.0, metadata={"timed_out": True})
 
     try:
         result = subprocess.run(
@@ -223,26 +242,28 @@ def compile_reward(
             text=True,
             timeout=COMPILE_TIMEOUT,
         )
-    except (subprocess.TimeoutExpired, Exception):
-        return 0.0
+    except subprocess.TimeoutExpired:
+        return RewardResult(score=0.0, metadata={"timed_out": True})
+    except Exception:
+        return RewardResult(score=0.0, metadata={"timed_out": False})
 
     # Compilation succeeded
     if result.returncode == 0:
-        return 0.10
+        return RewardResult(score=0.10, metadata={"timed_out": False})
     # Perfect type check but compilation failed (linking issues, etc.)
-    elif type_check["score"] == 0.25:
-        return 0.05
+    elif type_check.score == 0.25:
+        return RewardResult(score=0.05, metadata={"timed_out": False})
     # Syntax errors get no credit
-    elif type_check["has_syntax_error"]:
-        return 0.0
+    elif type_check.metadata.get("has_syntax_error"):
+        return RewardResult(score=0.0, metadata={"timed_out": False})
     # Type errors but attempted compilation
     else:
-        return 0.01
+        return RewardResult(score=0.01, metadata={"timed_out": False})
 
 
-def tests_reward(workdir: Path, executable_name: str) -> Tuple[float, Optional[str]]:
+def tests_reward(workdir: Path, executable_name: str) -> RewardResult:
     """
-    Run compiled executable and return test score and timeout stage if any.
+    Run compiled executable and return test score.
 
     Executes the compiled binary which should contain self-test code.
     Success is determined by zero exit code.
@@ -252,9 +273,8 @@ def tests_reward(workdir: Path, executable_name: str) -> Tuple[float, Optional[s
         executable_name: Name of the executable file
 
     Returns:
-        Tuple of (test_score, timeout_stage):
-        - test_score: 0.65 if all tests pass, 0.0 otherwise
-        - timeout_stage: "tests" if timeout occurred, None otherwise
+        RewardResult with score (0.65 if pass, 0.0 otherwise) and metadata
+        containing: timed_out
     """
     try:
         result = subprocess.run(
@@ -264,9 +284,12 @@ def tests_reward(workdir: Path, executable_name: str) -> Tuple[float, Optional[s
             text=True,
             timeout=TEST_TIMEOUT,
         )
-        return (0.65 if result.returncode == 0 else 0.0), None
+        return RewardResult(
+            score=0.65 if result.returncode == 0 else 0.0,
+            metadata={"timed_out": False},
+        )
     except subprocess.TimeoutExpired:
-        return 0.0, "tests"
+        return RewardResult(score=0.0, metadata={"timed_out": True})
 
 
 # ============================================================================
@@ -401,14 +424,14 @@ def ocaml_reward(completion: str, info: Dict[str, Any], state: Dict[str, Any]) -
 
         # Run compilation pipeline
         type_check_result = type_check_reward(source_path, tmpdir)
-        compile_score = compile_reward(source_path, tmpdir, problem_id, type_check_result)
+        compile_result = compile_reward(source_path, tmpdir, problem_id, type_check_result)
 
         # Only run tests if compilation succeeded
-        compile_succeeded = compile_score == 0.10
-        test_score, _ = tests_reward(tmpdir, problem_id) if compile_succeeded else (0.0, None)
+        compile_succeeded = compile_result.score == 0.10
+        test_result = tests_reward(tmpdir, problem_id) if compile_succeeded else RewardResult(0.0)
 
     # Calculate base reward
-    base_reward = type_check_result["score"] + compile_score + test_score
+    base_reward = type_check_result.score + compile_result.score + test_result.score
 
     # Apply degenerate output penalty
     is_degenerate = is_degenerate_output(completion, code)
@@ -494,6 +517,8 @@ def create_ocaml_env(
 # ============================================================================
 
 __all__ = [
+    # Data types
+    "RewardResult",
     # Code extraction
     "extract_code_block",
     "count_non_empty_code_lines",

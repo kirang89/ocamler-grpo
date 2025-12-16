@@ -19,6 +19,7 @@ import tempfile
 
 from logger import RewardLogger
 from ocaml_env import (
+    RewardResult,
     extract_code_block,
     count_non_empty_code_lines,
     type_check_reward,
@@ -159,17 +160,23 @@ def _score_completion_vf(
 
         # Run compilation pipeline
         type_check = type_check_reward(source_path, tmpdir)
-        compile_score = compile_reward(source_path, tmpdir, pid, type_check)
+        compile_result = compile_reward(source_path, tmpdir, pid, type_check)
 
         # Only run tests if compilation succeeded
-        compile_succeeded = compile_score == 0.10
-        test_score, test_timeout = tests_reward(tmpdir, pid) if compile_succeeded else (0.0, None)
+        compile_succeeded = compile_result.score == 0.10
+        test_result = (
+            tests_reward(tmpdir, pid) if compile_succeeded else RewardResult(0.0)
+        )
 
     # Determine timeout stage
-    timeout_stage = "type_check" if type_check["timed_out"] else test_timeout
+    timeout_stage = None
+    if type_check.metadata.get("timed_out"):
+        timeout_stage = "type_check"
+    elif test_result.metadata.get("timed_out"):
+        timeout_stage = "tests"
 
     # Calculate base reward
-    base_reward = type_check["score"] + compile_score + test_score
+    base_reward = type_check.score + compile_result.score + test_result.score
 
     # Apply degenerate output penalty
     is_degenerate = is_degenerate_output(completion, code)
@@ -179,15 +186,15 @@ def _score_completion_vf(
         "problem_id": pid,
         "total_reward": float(total_reward),
         "base_reward": float(base_reward),
-        "type_score": float(type_check["score"]),
-        "compile_score": float(compile_score),
-        "test_score": float(test_score),
-        "syntax_errors": type_check["syntax_errors"],
-        "error_details": type_check["error_details"],
+        "type_score": float(type_check.score),
+        "compile_score": float(compile_result.score),
+        "test_score": float(test_result.score),
+        "syntax_errors": type_check.metadata.get("syntax_errors"),
+        "error_details": type_check.metadata.get("error_details"),
         "prose_penalty_applied": is_degenerate,
         "is_degenerate": is_degenerate,
         "timeout_stage": timeout_stage,
-        "passed": bool(test_score >= 0.65),
+        "passed": bool(test_result.score >= 0.65),
     }
 
 

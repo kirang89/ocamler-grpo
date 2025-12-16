@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from ocaml_env import (
+    RewardResult,
     count_non_empty_code_lines,
     extract_code_block,
     compile_reward,
@@ -210,11 +211,11 @@ class TestOCamlCompilation:
 
             result = type_check_reward(source, tmpdir)
 
-            assert result["score"] == 0.25
-            assert result["syntax_errors"] == 0
-            assert result["has_syntax_error"] is False
-            assert result["timed_out"] is False
-            assert result["error_details"] == "success"
+            assert result.score == 0.25
+            assert result.metadata["syntax_errors"] == 0
+            assert result.metadata["has_syntax_error"] is False
+            assert result.metadata["timed_out"] is False
+            assert result.metadata["error_details"] == "success"
 
     def test_type_check_with_syntax_error(self):
         """Test type check with syntax errors gets zero score."""
@@ -225,9 +226,9 @@ class TestOCamlCompilation:
 
             result = type_check_reward(source, tmpdir)
 
-            assert result["score"] == 0.0
-            assert result["has_syntax_error"] is True
-            assert result["timed_out"] is False
+            assert result.score == 0.0
+            assert result.metadata["has_syntax_error"] is True
+            assert result.metadata["timed_out"] is False
 
     def test_type_check_graduated_scoring(self):
         """Test graduated scoring for type errors."""
@@ -246,8 +247,8 @@ class TestOCamlCompilation:
                 result = type_check_reward(source, tmpdir)
 
                 # Score should match expected (allowing for actual error count)
-                assert result["score"] > 0.0  # Should have partial credit
-                assert result["has_syntax_error"] is False
+                assert result.score > 0.0  # Should have partial credit
+                assert result.metadata["has_syntax_error"] is False
 
     def test_type_check_many_errors(self):
         """Test type check with many errors gets graduated partial credit."""
@@ -263,9 +264,9 @@ class TestOCamlCompilation:
 
             # Should get some partial credit (graduated based on actual error count)
             # The score depends on how many errors OCaml actually reports
-            assert 0.0 < result["score"] <= 0.20
-            assert result["has_syntax_error"] is False
-            assert result["timed_out"] is False
+            assert 0.0 < result.score <= 0.20
+            assert result.metadata["has_syntax_error"] is False
+            assert result.metadata["timed_out"] is False
 
     def test_compile_success(self):
         """Test successful compilation."""
@@ -276,9 +277,9 @@ class TestOCamlCompilation:
 
             # Get type check result first
             type_check = type_check_reward(source, tmpdir)
-            compile_score = compile_reward(source, tmpdir, "test", type_check)
+            compile_result = compile_reward(source, tmpdir, "test", type_check)
 
-            assert compile_score == 0.10
+            assert compile_result.score == 0.10
 
     def test_compile_failure_with_perfect_type_check(self):
         """Test compilation failure with perfect type check gets partial credit."""
@@ -289,10 +290,10 @@ class TestOCamlCompilation:
             source.write_text("let x = 1")
 
             type_check = type_check_reward(source, tmpdir)
-            compile_score = compile_reward(source, tmpdir, "test", type_check)
+            compile_result = compile_reward(source, tmpdir, "test", type_check)
 
             # Should either compile successfully (0.10) or get partial credit (0.05)
-            assert compile_score in [0.10, 0.05]
+            assert compile_result.score in [0.10, 0.05]
 
     def test_compile_with_type_errors(self):
         """Test compilation with type errors gets minimal credit."""
@@ -302,10 +303,10 @@ class TestOCamlCompilation:
             source.write_text('let x : int = "string"')
 
             type_check = type_check_reward(source, tmpdir)
-            compile_score = compile_reward(source, tmpdir, "test", type_check)
+            compile_result = compile_reward(source, tmpdir, "test", type_check)
 
             # Should get minimal credit for attempting compilation
-            assert compile_score == 0.01
+            assert compile_result.score == 0.01
 
     def test_compile_with_syntax_error(self):
         """Test compilation with syntax errors gets no credit."""
@@ -315,9 +316,9 @@ class TestOCamlCompilation:
             source.write_text("let x =")
 
             type_check = type_check_reward(source, tmpdir)
-            compile_score = compile_reward(source, tmpdir, "test", type_check)
+            compile_result = compile_reward(source, tmpdir, "test", type_check)
 
-            assert compile_score == 0.0
+            assert compile_result.score == 0.0
 
     def test_test_execution_success(self):
         """Test successful test execution."""
@@ -329,12 +330,12 @@ class TestOCamlCompilation:
 
             # Compile first
             type_check = type_check_reward(source, tmpdir)
-            compile_score = compile_reward(source, tmpdir, "test_exe", type_check)
+            compile_result = compile_reward(source, tmpdir, "test_exe", type_check)
 
-            if compile_score == 0.10:
-                test_score, timeout_stage = tests_reward(tmpdir, "test_exe")
-                assert test_score == 0.65
-                assert timeout_stage is None
+            if compile_result.score == 0.10:
+                test_result = tests_reward(tmpdir, "test_exe")
+                assert test_result.score == 0.65
+                assert test_result.metadata["timed_out"] is False
 
     def test_test_execution_failure(self):
         """Test failed test execution."""
@@ -346,12 +347,12 @@ class TestOCamlCompilation:
 
             # Compile first
             type_check = type_check_reward(source, tmpdir)
-            compile_score = compile_reward(source, tmpdir, "test_exe", type_check)
+            compile_result = compile_reward(source, tmpdir, "test_exe", type_check)
 
-            if compile_score == 0.10:
-                test_score, timeout_stage = tests_reward(tmpdir, "test_exe")
-                assert test_score == 0.0
-                assert timeout_stage is None
+            if compile_result.score == 0.10:
+                test_result = tests_reward(tmpdir, "test_exe")
+                assert test_result.score == 0.0
+                assert test_result.metadata["timed_out"] is False
 
 
 # ============================================================================
