@@ -173,6 +173,10 @@
             <canvas id="rewardChart"></canvas>
         </div>
         <div class="chart-card">
+            <div class="chart-title">Error Breakdown (cumulative %)</div>
+            <canvas id="errorChart"></canvas>
+        </div>
+        <div class="chart-card">
             <div class="chart-title">Fraction Zero Std</div>
             <canvas id="fracZeroChart"></canvas>
         </div>
@@ -353,6 +357,72 @@
             });
         }
 
+        function renderErrorChart(canvasId, data) {
+            destroyChart(canvasId);
+            if (!data || !data.steps || data.steps.length === 0) {
+                return;
+            }
+
+            const ctx = document.getElementById(canvasId).getContext('2d');
+            const colors = getChartColors();
+            const config = getCommonConfig(colors);
+            config.plugins.legend = { display: true, labels: { color: colors.text } };
+            config.scales.y.title = {
+                display: true,
+                text: 'Cumulative error rate (%)',
+                color: colors.tick
+            };
+            config.scales.y.suggestedMin = 0;
+            config.scales.y.suggestedMax = 100;
+            config.scales.x.title = { display: true, text: 'Completion #', color: colors.tick };
+
+            charts[canvasId] = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: data.steps,
+                    datasets: [
+                        {
+                            label: 'Syntax errors',
+                            data: data.syntax_error_rate,
+                            borderColor: '#f472b6',
+                            backgroundColor: '#f472b633',
+                            borderWidth: 2,
+                            pointRadius: 0,
+                            tension: 0.1
+                        },
+                        {
+                            label: 'Type errors',
+                            data: data.type_error_rate,
+                            borderColor: '#60a5fa',
+                            backgroundColor: '#60a5fa33',
+                            borderWidth: 2,
+                            pointRadius: 0,
+                            tension: 0.1
+                        },
+                        {
+                            label: 'Compile errors',
+                            data: data.compile_error_rate,
+                            borderColor: '#fbbf24',
+                            backgroundColor: '#fbbf2433',
+                            borderWidth: 2,
+                            pointRadius: 0,
+                            tension: 0.1
+                        },
+                        {
+                            label: 'Execution failures',
+                            data: data.execution_failure_rate,
+                            borderColor: '#fb923c',
+                            backgroundColor: '#fb923c33',
+                            borderWidth: 2,
+                            pointRadius: 0,
+                            tension: 0.1
+                        }
+                    ]
+                },
+                options: config
+            });
+        }
+
         function renderCharts(data) {
             renderChart('lossChart', { epochs: data.epochs, values: data.loss }, 'Loss', '#f472b6');
             renderChart('gradChart', { epochs: data.epochs, values: data.grad }, 'Grad', '#fb923c');
@@ -360,6 +430,7 @@
             renderChart('entropyChart', { epochs: data.epochs, values: data.entropy }, 'Entropy', '#22d3d1');
             renderRewardChart('rewardChart', data);
             renderChart('fracZeroChart', { epochs: data.epochs, values: data.frac_zero_std }, 'Frac Zero Std', '#fbbf24');
+            renderErrorChart('errorChart', data.error_metrics);
         }
 
         async function loadData() {
