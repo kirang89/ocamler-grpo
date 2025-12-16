@@ -214,6 +214,7 @@ def create_grpo_config(temperature=None) -> GRPOConfig:
         gradient_checkpointing=False,
         eval_strategy="no",
         save_steps=100,
+        save_total_limit=10,  # Keep last 10 checkpoints to manage disk space
         dataloader_num_workers=8,  # Use CPU cores
         dataloader_persistent_workers=True,
         dataloader_pin_memory=True,
