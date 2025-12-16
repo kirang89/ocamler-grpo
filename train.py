@@ -11,7 +11,7 @@ from transformers import AutoTokenizer, TrainerCallback
 from trl import GRPOConfig, GRPOTrainer
 
 from logger import RewardLogger, log_learning_metrics
-from reward import RewardEvaluator, build_reward_functions
+from reward_vf import build_reward_functions_vf
 
 
 def _ensure_cuda_driver():
@@ -270,13 +270,13 @@ def main():
     model_id = resolve_model_id()
     dataset = build_training_dataset(TRAINING_DATASET)
     tokenizer = create_tokenizer(model_id)
-    evaluator = RewardEvaluator()
 
     output_path = Path(GRPO_OUTPUT_DIR)
     output_path.mkdir(parents=True, exist_ok=True)
 
     reward_logger = RewardLogger(output_path / "reward_logs")
-    reward_funcs = build_reward_functions(evaluator, reward_logger)
+    # Use verifiers-based reward functions (migration from reward.py)
+    reward_funcs = build_reward_functions_vf(TRAINING_DATASET, reward_logger)
 
     config = create_grpo_config()
     lora_config = create_lora_config()
