@@ -37,7 +37,8 @@ class RewardEvaluator:
         self._cache: Dict[Tuple[str, str, str], Dict[str, bool]] = {}
 
     def evaluate(self, problem_id: str, completion: str, tests: str = "") -> Dict[str, bool]:
-        """Compile and run a completion combined with pre-defined tests, returning booleans for downstream reward fns."""
+        """Compile and run a completion combined with pre-defined tests,
+        returning booleans for downstream reward fns."""
         code = extract_code_block(completion)
         cache_key = (problem_id, code, tests)
         if cache_key in self._cache:
@@ -150,41 +151,8 @@ def make_syntax_aware_reward(evaluator, logger):
                 result = _score_completion(pid, completion, tests)
 
             rewards.append(float(result["total_reward"]))
-            detailed_logs.append(
-                {
-                    "problem_id": pid,
-                    "total_reward": float(result["total_reward"]),
-                    "base_reward": float(result["base_reward"]),
-                    "type_check": float(result["type_score"]),
-                    "compile": float(result["compile_score"]),
-                    "tests": float(result["test_score"]),
-                    "syntax_errors": result.get("syntax_errors"),
-                    "error_sample": result.get("error_details"),
-                    "prose_penalty_applied": result["prose_penalty_applied"],
-                    "is_degenerate": result["is_degenerate"],
-                    "preview": completion[:200],
-                    **(
-                        {"timeout_stage": result["timeout_stage"]}
-                        if result["timeout_stage"]
-                        else {}
-                    ),
-                }
-            )
-            completion_logs.append(
-                {
-                    "problem_id": pid,
-                    "reward": float(result["total_reward"]),
-                    "base_reward": float(result["base_reward"]),
-                    "length": len(completion),
-                    "prose_penalty_applied": result["prose_penalty_applied"],
-                    "completion": completion,
-                    **(
-                        {"timeout_stage": result["timeout_stage"]}
-                        if result["timeout_stage"]
-                        else {}
-                    ),
-                }
-            )
+            detailed_logs.append(build_detailed_log_entry(pid, completion, result))
+            completion_logs.append(build_completion_log_entry(pid, completion, result))
 
         if logger:
             logger.log("syntax_aware_breakdown", detailed_logs)
@@ -256,6 +224,39 @@ def run_tests(executable_path: Path) -> Tuple[bool, str]:
 
 
 # Utilities
+
+
+def build_detailed_log_entry(pid: str, completion: str, result: Dict[str, Any]) -> Dict[str, Any]:
+    entry = {
+        "problem_id": pid,
+        "total_reward": float(result["total_reward"]),
+        "base_reward": float(result["base_reward"]),
+        "type_check": float(result["type_score"]),
+        "compile": float(result["compile_score"]),
+        "tests": float(result["test_score"]),
+        "syntax_errors": result.get("syntax_errors"),
+        "error_sample": result.get("error_details"),
+        "prose_penalty_applied": result["prose_penalty_applied"],
+        "is_degenerate": result["is_degenerate"],
+        "preview": completion[:200],
+    }
+    if result["timeout_stage"]:
+        entry["timeout_stage"] = result["timeout_stage"]
+    return entry
+
+
+def build_completion_log_entry(pid: str, completion: str, result: Dict[str, Any]) -> Dict[str, Any]:
+    entry = {
+        "problem_id": pid,
+        "reward": float(result["total_reward"]),
+        "base_reward": float(result["base_reward"]),
+        "length": len(completion),
+        "prose_penalty_applied": result["prose_penalty_applied"],
+        "completion": completion,
+    }
+    if result["timeout_stage"]:
+        entry["timeout_stage"] = result["timeout_stage"]
+    return entry
 
 
 def make_structural_reward(
