@@ -10,7 +10,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from logger import RewardLogger, log_reward_entries
 
 FUNCTION_DEF_RE = re.compile(r"\blet\s+[a-zA-Z0-9_']+\s*(?:\([^)]*\))?\s*=", re.MULTILINE)
-MIN_NON_EMPTY_LINES = 8
+MIN_NON_EMPTY_LINES = 2
 CODE_BLOCK_RE = re.compile(r"```(.*?)```", re.DOTALL)
 LANGUAGE_HINTS = {"ocaml", "ml", "code", "language", "language:ocaml"}
 
@@ -321,9 +321,7 @@ def prepare_source_file(
     return source_path, code
 
 
-def apply_degenerate_penalty(
-    base_reward: float, completion: str, code: str
-) -> Tuple[float, bool]:
+def apply_degenerate_penalty(base_reward: float, completion: str, code: str) -> Tuple[float, bool]:
     """Apply prose penalty if output is degenerate. Returns (total_reward, penalty_applied)."""
     is_degenerate = is_degenerate_output(completion, code)
     if is_degenerate:
