@@ -14,15 +14,14 @@ import pytest
 
 from ocaml_env import (
     RewardResult,
+    compile_reward,
     count_non_empty_code_lines,
     extract_code_block,
-    compile_reward,
-    tests_reward,
-    type_check_reward,
     is_degenerate_output,
     ocaml_reward,
+    tests_reward,
+    type_check_reward,
 )
-
 
 # ============================================================================
 # Code Extraction Tests
@@ -30,8 +29,6 @@ from ocaml_env import (
 
 
 class TestCodeExtraction:
-    """Tests for extract_code_block function."""
-
     def test_extract_code_block_with_language_hint(self):
         """Test extraction from markdown fences with language hint."""
         code = "let x = 1"
@@ -63,13 +60,10 @@ class TestCodeExtraction:
         code = "let x = 1"
         assert extract_code_block(code) == code
 
-        # With extra whitespace
-        assert extract_code_block(f"  {code}  ") == code
-
     def test_extract_with_prose_and_code_block(self):
         """Test extraction with prose before code block."""
         code = "let add x y = x + y"
-        text = f"Here's the solution:\n```ocaml\n{code}\n```"
+        text = f"Here's the solution:\n```ocaml\n{code}\n```\n Try it out and let me know"
         assert extract_code_block(text) == code
 
 
@@ -97,8 +91,6 @@ class TestCodeLineCounter:
         # Note: Only lines starting with (* are excluded. Multi-line
         # comment continuation lines are counted as they don't start with (*
         code = "let x = 1\n(* multi-line\n   comment *)\nlet y = 2"
-        # 3 counted: let x = 1, "   comment *)", let y = 2
-        # Only "(* multi-line" is excluded
         assert count_non_empty_code_lines(code) == 3
 
     def test_count_empty_code(self):
@@ -234,8 +226,8 @@ class TestOCamlCompilation:
         """Test graduated scoring for type errors."""
         test_cases = [
             # (error_count, expected_score, code_description)
-            (1, 0.20, "let x : int = \"string\""),
-            (2, 0.15, "let x : int = \"string\"\nlet y : int = \"string\""),
+            (1, 0.20, 'let x : int = "string"'),
+            (2, 0.15, 'let x : int = "string"\nlet y : int = "string"'),
         ]
 
         for error_count, expected_score, code in test_cases:

@@ -4,10 +4,33 @@ import subprocess
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import verifiers as vf
 from datasets import Dataset, load_dataset
+
+CODE_BLOCK_RE = re.compile(r"```(.*?)```", re.DOTALL)
+LANGUAGE_HINTS = {"ocaml", "ml", "language:ocaml"}
+MIN_NON_EMPTY_LINES = 2
+TYPE_CHECK_TIMEOUT = 5
+COMPILE_TIMEOUT = 10
+TEST_TIMEOUT = 30
+SYNTAX_ERROR_RE = (
+    r"Syntax error|Illegal character|unexpected token|Unterminated|This '.*' might be unmatched"
+)
+# Graduate type error scores
+TYPE_ERROR_SCORE_MAP = {
+    0: 0.0,
+    1: 0.20,
+    2: 0.15,
+    3: 0.10,
+    4: 0.05,
+    5: 0.04,
+    6: 0.03,
+    7: 0.025,
+    8: 0.02,
+    9: 0.015,
+}
 
 
 @dataclass
@@ -17,17 +40,8 @@ class RewardResult:
     score: float
     metadata: Dict[str, Any] = field(default_factory=dict)
 
-CODE_BLOCK_RE = re.compile(r"```(.*?)```", re.DOTALL)
-LANGUAGE_HINTS = {"ocaml", "ml", "code", "language", "language:ocaml"}
-MIN_NON_EMPTY_LINES = 2
-TYPE_CHECK_TIMEOUT = 5
-COMPILE_TIMEOUT = 10
-TEST_TIMEOUT = 30
 
-
-# ============================================================================
-# 2. Code Extraction Utilities
-# ============================================================================
+# Code Extraction Utilities
 
 
 def extract_code_block(text: str) -> str:
@@ -80,31 +94,25 @@ def count_non_empty_code_lines(code: str) -> int:
     return count
 
 
-# ============================================================================
-# 3. OCaml Compilation Functions
-# ============================================================================
+# Reward Functions
 
 
 def type_check_reward(source_path: Path, workdir: Path) -> RewardResult:
     """
     Run OCaml type check and return graduated score based on error count.
 
-    Uses `ocamlc -c` to check syntax and type errors without linking.
-    Provides graduated partial credit for code with type errors to create
-    a smooth learning signal.
-
     Score distribution:
-    - 0 errors (perfect): 0.25 (100% of type check reward)
-    - 1 error: 0.20 (80%)
-    - 2 errors: 0.15 (60%)
-    - 3 errors: 0.10 (40%)
-    - 4 errors: 0.05 (20%)
-    - 5 errors: 0.04 (16%)
-    - 6 errors: 0.03 (12%)
-    - 7 errors: 0.025 (10%)
-    - 8 errors: 0.02 (8%)
-    - 9 errors: 0.015 (6%)
-    - 10+ errors: 0.01 (4%)
+    - 0 errors: 0.25
+    - 1 error:  0.20
+    - 2 errors: 0.15
+    - 3 errors: 0.10
+    - 4 errors: 0.05
+    - 5 errors: 0.04
+    - 6 errors: 0.03
+    - 7 errors: 0.025
+    - 8 errors: 0.02
+    - 9 errors: 0.015
+    - 10+ errors: 0.01
     - Syntax errors: 0.0
 
     Args:
@@ -116,11 +124,12 @@ def type_check_reward(source_path: Path, workdir: Path) -> RewardResult:
         error_details, has_syntax_error, timed_out
     """
     try:
-        result = subprocess.run(
+        subprocess.run(
             ["ocamlc", "-c", source_path.name],
             cwd=workdir,
             capture_output=True,
             text=True,
+            check=True,
             timeout=TYPE_CHECK_TIMEOUT,
         )
     except subprocess.TimeoutExpired:
@@ -131,6 +140,31 @@ def type_check_reward(source_path: Path, workdir: Path) -> RewardResult:
                 "error_details": "[TimeoutExpired] Type check failed",
                 "has_syntax_error": False,
                 "timed_out": True,
+            },
+        )
+    except subprocess.CalledProcessError as exc:
+        # raised when return code is non-zero
+        stderr = exc.stderr or ""
+        has_syntax_error = bool(re.search(SYNTAX_ERROR_RE, stderr, re.IGNORECASE))
+        error_count = len(re.findall(r"\bError:", stderr))
+        score = 0.0
+        msg = ""
+
+        # Syntax errors get zero reward
+        if has_syntax_error:
+            error_count = 0
+            msg = f"[SYNTAX ERROR] {stderr[:300]}"
+        else:
+            msg = f"[TYPE ERRORS: {error_count}] {stderr[:250]}"
+            score = TYPE_ERROR_SCORE_MAP.get(error_count, 0.01)
+
+        return RewardResult(
+            score=score,
+            metadata={
+                "syntax_errors": error_count,
+                "error_details": msg,
+                "has_syntax_error": has_syntax_error,
+                "timed_out": False,
             },
         )
     except Exception as exc:
@@ -144,63 +178,12 @@ def type_check_reward(source_path: Path, workdir: Path) -> RewardResult:
             },
         )
 
-    # Success case - perfect type check
-    if result.returncode == 0:
-        return RewardResult(
-            score=0.25,
-            metadata={
-                "syntax_errors": 0,
-                "error_details": "success",
-                "has_syntax_error": False,
-                "timed_out": False,
-            },
-        )
-
-    # Parse errors from stderr
-    stderr = result.stderr
-    has_syntax_error = bool(
-        re.search(
-            r"Syntax error|Illegal character|unexpected token|Unterminated|"
-            r"This '.*' might be unmatched",
-            stderr,
-            re.IGNORECASE,
-        )
-    )
-    error_count = len(re.findall(r"\bError:", stderr))
-
-    # Syntax errors get zero reward
-    if has_syntax_error:
-        return RewardResult(
-            score=0.0,
-            metadata={
-                "syntax_errors": error_count,
-                "error_details": f"[SYNTAX ERROR] {stderr[:300]}",
-                "has_syntax_error": True,
-                "timed_out": False,
-            },
-        )
-
-    # Graduate type error scores with granular rewards for high error counts
-    # This provides a learning signal even when solutions have many type errors
-    score_map = {
-        0: 0.0,  # Perfect type check handled separately (returns 0.25 early)
-        1: 0.20,  # 1 error: 80% of max type reward
-        2: 0.15,  # 2 errors: 60%
-        3: 0.10,  # 3 errors: 40%
-        4: 0.05,  # 4 errors: 20%
-        5: 0.04,  # 5 errors: 16%
-        6: 0.03,  # 6 errors: 12%
-        7: 0.025,  # 7 errors: 10%
-        8: 0.02,  # 8 errors: 8%
-        9: 0.015,  # 9 errors: 6%
-    }
-    score = score_map.get(error_count, 0.01)  # 10+ errors: 4%
-
+    # Check passed
     return RewardResult(
-        score=score,
+        score=0.25,
         metadata={
             "syntax_errors": 0,
-            "error_details": f"[TYPE ERRORS: {error_count}] {stderr[:250]}",
+            "error_details": "success",
             "has_syntax_error": False,
             "timed_out": False,
         },
