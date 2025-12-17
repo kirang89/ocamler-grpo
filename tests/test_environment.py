@@ -1,6 +1,4 @@
 """
-Unit tests for ocaml_env.py
-
 Tests verify that the verifiers environment migration preserves
 the expected behavior from the original reward.py implementation.
 """
@@ -12,8 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from ocaml_env import (
-    RewardResult,
+from environment import (
     compile_reward,
     count_non_empty_code_lines,
     extract_code_block,
@@ -526,7 +523,7 @@ class TestDatasetLoading:
     @pytest.mark.skip(reason="Requires network access to HuggingFace")
     def test_load_ocaml_dataset(self):
         """Test loading OCaml dataset from HuggingFace."""
-        from ocaml_env import load_ocaml_dataset
+        from environment import load_ocaml_dataset
 
         dataset = load_ocaml_dataset("kiranpg/ocaml-training-problems")
 
@@ -543,7 +540,7 @@ class TestDatasetLoading:
     @pytest.mark.skip(reason="Requires network access to HuggingFace")
     def test_create_ocaml_env(self):
         """Test creating OCaml environment."""
-        from ocaml_env import create_ocaml_env
+        from environment import create_ocaml_env
 
         env = create_ocaml_env("kiranpg/ocaml-training-problems")
 

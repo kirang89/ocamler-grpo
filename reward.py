@@ -17,8 +17,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from logger import RewardLogger
-from ocaml_env import (
+from environment import (
     MIN_NON_EMPTY_LINES,
     RewardResult,
     compile_reward,
@@ -28,6 +27,7 @@ from ocaml_env import (
     tests_reward,
     type_check_reward,
 )
+from logger import RewardLogger
 
 # Default zero-reward result template
 REWARDS_ZERO: Dict[str, Any] = {
