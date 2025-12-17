@@ -12,7 +12,7 @@ from transformers.trainer_utils import get_last_checkpoint
 from trl import GRPOConfig, GRPOTrainer
 
 from logger import RewardLogger, log_learning_metrics
-from reward_vf import build_reward_functions_vf
+from reward import build_reward_functions_vf
 
 
 def _ensure_cuda_driver():
@@ -287,7 +287,9 @@ def main():
         print(f"Resuming training from checkpoint: {last_checkpoint}")
         # Load LoRA config from checkpoint to ensure compatibility
         lora_config = PeftConfig.from_pretrained(last_checkpoint)
-        print(f"Loaded LoRA config from checkpoint (r={lora_config.r}, alpha={lora_config.lora_alpha})")
+        print(
+            f"Loaded LoRA config from checkpoint (r={lora_config.r}, alpha={lora_config.lora_alpha})"
+        )
     else:
         print("No checkpoint found. Starting training from scratch.")
         lora_config = create_lora_config()
