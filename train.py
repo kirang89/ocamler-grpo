@@ -6,8 +6,9 @@ import textwrap
 from pathlib import Path
 
 from datasets import Dataset, load_dataset
-from peft import LoraConfig, TaskType
+from peft import LoraConfig, PeftConfig, TaskType
 from transformers import AutoTokenizer, TrainerCallback
+from transformers.trainer_utils import get_last_checkpoint
 from trl import GRPOConfig, GRPOTrainer
 
 from logger import RewardLogger, log_learning_metrics
@@ -279,7 +280,17 @@ def main():
     reward_funcs = build_reward_functions_vf(TRAINING_DATASET, reward_logger)
 
     config = create_grpo_config()
-    lora_config = create_lora_config()
+
+    # Check for existing checkpoint to resume from
+    last_checkpoint = get_last_checkpoint(GRPO_OUTPUT_DIR)
+    if last_checkpoint:
+        print(f"Resuming training from checkpoint: {last_checkpoint}")
+        # Load LoRA config from checkpoint to ensure compatibility
+        lora_config = PeftConfig.from_pretrained(last_checkpoint)
+        print(f"Loaded LoRA config from checkpoint (r={lora_config.r}, alpha={lora_config.lora_alpha})")
+    else:
+        print("No checkpoint found. Starting training from scratch.")
+        lora_config = create_lora_config()
 
     # Create learning metrics callback
     learning_log_path = output_path / "learning.log"
@@ -295,7 +306,7 @@ def main():
         callbacks=[learning_callback],
     )
 
-    trainer.train()
+    trainer.train(resume_from_checkpoint=last_checkpoint)
 
     trainer.save_model(GRPO_OUTPUT_DIR)
     tokenizer.save_pretrained(GRPO_OUTPUT_DIR)
