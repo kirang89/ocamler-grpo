@@ -18,13 +18,13 @@ dependencies = [
 
 [project.optional-dependencies]
 cuda = [
-    "torch>=2.0.0",
-    "torchvision>=0.15.0",
+    "torch>=2.6.0",
+    "torchvision>=0.21.0",
 ]
 
 [[tool.uv.index]]
 name = "pytorch"
-url = "https://download.pytorch.org/whl/cu121"
+url = "https://download.pytorch.org/whl/cu124"
 explicit = true
 
 [tool.uv.sources]
