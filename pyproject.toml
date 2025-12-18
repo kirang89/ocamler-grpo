@@ -8,21 +8,23 @@ dependencies = [
     "datasets>=4.4.1",
     "openai>=1.51.0",
     "pandas>=2.3.3",
-    "ruff>=0.14.5",
-    "requests>=2.32.3",
-    "trl>=0.25.1",
     "peft>=0.18.0",
+    "pytest>=8.0.0",
+    "requests>=2.32.3",
+    "ruff>=0.14.5",
+    "trl>=0.25.1",
+    "verifiers>=0.1.8",
 ]
 
 [project.optional-dependencies]
 cuda = [
-    "torch>=2.0.0",
-    "torchvision>=0.15.0",
+    "torch>=2.6.0",
+    "torchvision>=0.21.0",
 ]
 
 [[tool.uv.index]]
 name = "pytorch"
-url = "https://download.pytorch.org/whl/cu121"
+url = "https://download.pytorch.org/whl/cu124"
 explicit = true
 
 [tool.uv.sources]
@@ -32,6 +34,11 @@ torch = [
 torchvision = [
     { index = "pytorch", marker = "sys_platform == 'linux'" },
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
 
 [tool.ruff]
 line-length = 100
