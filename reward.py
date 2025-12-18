@@ -13,7 +13,9 @@ The verifiers environment provides:
 This adapter bridges the two interfaces while maintaining logging compatibility.
 """
 
+import os
 import tempfile
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -29,6 +31,9 @@ from environment import (
 )
 from logger import RewardLogger
 
+# Default pool size for parallel reward computation
+DEFAULT_REWARD_POOL_SIZE = 4
+
 # Default zero-reward result template
 REWARDS_ZERO: Dict[str, Any] = {
     "total_reward": 0.0,
@@ -43,6 +48,47 @@ REWARDS_ZERO: Dict[str, Any] = {
     "timeout_stage": None,
     "passed": False,
 }
+
+
+def _compute_rewards_parallel(
+    completions: List[str],
+    ids: List[str],
+    tests_list: List[str],
+) -> List[Dict[str, Any]]:
+    """
+    Score completions in parallel using a process pool.
+
+    Args:
+        completions: List of model completion strings
+        ids: List of problem IDs (same length as completions)
+        tests_list: List of test code strings (same length as completions)
+
+    Returns:
+        List of scoring result dictionaries from _score_completion_vf
+    """
+    args_list = [
+        (
+            ids[idx] if idx < len(ids) else f"sample_{idx}",
+            completion,
+            tests_list[idx] if idx < len(tests_list) else "",
+        )
+        for idx, completion in enumerate(completions)
+    ]
+
+    pool_size = int(os.environ.get("REWARD_POOL_SIZE", DEFAULT_REWARD_POOL_SIZE))
+    with ProcessPoolExecutor(max_workers=pool_size) as executor:
+        # Submit all tasks and track their indices to preserve order
+        future_to_index = {
+            executor.submit(_score_completion_vf, *args): idx
+            for idx, args in enumerate(args_list)
+        }
+        # Collect results as they complete (parallel) but reorder before returning
+        results = [None] * len(args_list)
+        for future in as_completed(future_to_index):
+            idx = future_to_index[future]
+            results[idx] = future.result()
+
+    return results
 
 
 def build_reward_functions_vf(dataset_id: str, logger: RewardLogger | None) -> List[Callable]:
@@ -98,17 +144,17 @@ def make_syntax_aware_reward_vf(logger: RewardLogger | None) -> Callable:
         """
         ids = problem_id or kwargs.get("problem_id") or []
         tests_list = kwargs.get("tests") or []
+
+        # Score all completions in parallel
+        results = _compute_rewards_parallel(completions, ids, tests_list)
+
+        # Build rewards and logs from results
         rewards = []
         detailed_logs = []
         completion_logs = []
-
-        for idx, completion in enumerate(completions):
+        for idx, result in enumerate(results):
             pid = ids[idx] if idx < len(ids) else f"sample_{idx}"
-            tests = tests_list[idx] if idx < len(tests_list) else ""
-
-            # Score the completion using verifiers environment logic
-            result = _score_completion_vf(pid, completion, tests)
-
+            completion = completions[idx]
             rewards.append(float(result["total_reward"]))
             detailed_logs.append(_build_detailed_log_entry(pid, completion, result))
             completion_logs.append(_build_completion_log_entry(pid, completion, result))

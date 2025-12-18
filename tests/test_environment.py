@@ -109,6 +109,14 @@ class TestCodeLineCounter:
 class TestDegenerateDetection:
     """Tests for is_degenerate_output function."""
 
+    @pytest.fixture(autouse=True)
+    def clear_prose_penalty_env(self):
+        """Ensure GRPO_DISABLE_PROSE_PENALTY is not set for these tests."""
+        old_value = os.environ.pop("GRPO_DISABLE_PROSE_PENALTY", None)
+        yield
+        if old_value is not None:
+            os.environ["GRPO_DISABLE_PROSE_PENALTY"] = old_value
+
     def test_prose_detection(self):
         """Test prose conversational patterns are detected."""
         code = "let x = 1"
@@ -352,6 +360,14 @@ class TestOCamlCompilation:
 @pytest.mark.skipif(not shutil.which("ocamlc"), reason="OCaml not installed")
 class TestOCamlRewardEndToEnd:
     """End-to-end tests for ocaml_reward function."""
+
+    @pytest.fixture(autouse=True)
+    def clear_prose_penalty_env(self):
+        """Ensure GRPO_DISABLE_PROSE_PENALTY is not set for these tests."""
+        old_value = os.environ.pop("GRPO_DISABLE_PROSE_PENALTY", None)
+        yield
+        if old_value is not None:
+            os.environ["GRPO_DISABLE_PROSE_PENALTY"] = old_value
 
     def test_perfect_solution(self):
         """Test with valid OCaml code that passes tests."""
