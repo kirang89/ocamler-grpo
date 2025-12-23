@@ -14,6 +14,8 @@ from environment import (
     compile_reward,
     count_non_empty_code_lines,
     extract_code_block,
+    extract_function_signature,
+    prepend_signature,
     is_degenerate_output,
     ocaml_reward,
     tests_reward,
@@ -62,6 +64,148 @@ class TestCodeExtraction:
         code = "let add x y = x + y"
         text = f"Here's the solution:\n```ocaml\n{code}\n```\n Try it out and let me know"
         assert extract_code_block(text) == code
+
+
+SIGNATURE_PREPEND_TEST_CASES = [
+    # (prompt, completion, expected_completion, description)
+    # Body only - should prepend
+    (
+        "(**Doc*)\nlet rec factorial (n : int) : int =",
+        "match n with | 0 -> 1",
+        "let rec factorial (n : int) : int =\n  match n with | 0 -> 1",
+        "body only",
+    ),
+    # Completion starts with let (redefinition) - should not prepend
+    (
+        "(**Doc*)\nlet rec factorial (n : int) : int =",
+        "let rec factorial (n : int) : int = 1",
+        "let rec factorial (n : int) : int = 1",
+        "redefinition",
+    ),
+    # Local let binding - should prepend
+    (
+        "(**Doc*)\nlet rec factorial (n : int) : int =",
+        "let base = 1 in base",
+        "let rec factorial (n : int) : int =\n  let base = 1 in base",
+        "local let",
+    ),
+    # Leading whitespace before let - should not prepend (assumed redefinition)
+    (
+        "(**Doc*)\nlet foo (x : int) : int =",
+        "  let foo (x : int) : int = x",
+        "  let foo (x : int) : int = x",
+        "whitespace before let redefinition",
+    ),
+    # No signature in prompt - should not prepend
+    ("No docstring here", "match n with | 0 -> 1", "match n with | 0 -> 1", "no signature"),
+]
+
+SIGNATURE_TEST_CASES = [
+    # (prompt, expected_sig, expected_name, description)
+    # Simple recursive function
+    (
+        "(**Doc*)\nlet rec factorial (n : int) : int =",
+        "let rec factorial (n : int) : int =",
+        "factorial",
+        "simple recursive",
+    ),
+    # Non-recursive function
+    (
+        "(**Doc*)\nlet is_prime (n : int) : bool =",
+        "let is_prime (n : int) : bool =",
+        "is_prime",
+        "non-recursive",
+    ),
+    # Multiple parameters
+    (
+        "(**Doc*)\nlet rec power (base : int) (exp : int) : int =",
+        "let rec power (base : int) (exp : int) : int =",
+        "power",
+        "multi-param",
+    ),
+    # Generic type
+    (
+        "(**Doc*)\nlet rec last_element (lst : 'a list) : 'a =",
+        "let rec last_element (lst : 'a list) : 'a =",
+        "last_element",
+        "generic type",
+    ),
+    # Tuple return type
+    (
+        "(**Doc*)\nlet determine_os_variables (flavor : string) : string * string * string * string =",
+        "let determine_os_variables (flavor : string) : string * string * string * string =",
+        "determine_os_variables",
+        "tuple return",
+    ),
+    # Complex parameters
+    (
+        "(**Doc*)\nlet a_star (graph : (int * int) list array) (heuristic : int -> int -> int) (start : int) (goal : int) : int list =",
+        "let a_star (graph : (int * int) list array) (heuristic : int -> int -> int) (start : int) (goal : int) : int list =",
+        "a_star",
+        "complex params",
+    ),
+    # Result type
+    (
+        "(**Doc*)\nlet add (x : int option) (y : int option) : (int, string) result =",
+        "let add (x : int option) (y : int option) : (int, string) result =",
+        "add",
+        "result type",
+    ),
+    # Trailing whitespace
+    (
+        "(**Doc*)\nlet foo (x : int) : int =   ",
+        "let foo (x : int) : int =",
+        "foo",
+        "trailing whitespace",
+    ),
+    # Full docstring with examples
+    (
+        "(**Compute the factorial\n * >>> factorial 5\n * 120\n*)\nlet rec factorial (n : int) : int =",
+        "let rec factorial (n : int) : int =",
+        "factorial",
+        "full docstring",
+    ),
+    # No signature - just text
+    ("Just some text without a function signature", "", "", "no signature"),
+    # No docstring
+    ("let rec factorial (n : int) : int =", "let rec factorial (n : int) : int =", "factorial", "no docstring"),
+    # Literal \n (as in CSV) instead of actual newline
+    (
+        "(**Doc*)\\nlet rec factorial (n : int) : int =",
+        "let rec factorial (n : int) : int =",
+        "factorial",
+        "literal backslash-n",
+    ),
+    # Type definition before function
+    (
+        "(**Doc*)\\ntype element = Int of int\\nlet list_sorter (lst : element list) : float list =",
+        "let list_sorter (lst : element list) : float list =",
+        "list_sorter",
+        "type definition",
+    ),
+    # Trailing literal \n
+    (
+        "(**Doc*)\\nlet sieve (lst : int list) : int list =\\n",
+        "let sieve (lst : int list) : int list =",
+        "sieve",
+        "trailing literal newline",
+    ),
+]
+
+
+class TestFunctionSignatureExtraction:
+    """Tests for extract_function_signature and prepend_signature functions."""
+
+    @pytest.mark.parametrize("prompt,expected_sig,expected_name,desc", SIGNATURE_TEST_CASES)
+    def test_extract_signature(self, prompt, expected_sig, expected_name, desc):
+        sig, name = extract_function_signature(prompt)
+        assert sig == expected_sig, f"Failed signature for {desc}: got {sig!r}"
+        assert name == expected_name, f"Failed name for {desc}: got {name!r}"
+
+    @pytest.mark.parametrize("prompt,completion,expected,desc", SIGNATURE_PREPEND_TEST_CASES)
+    def test_prepend_logic(self, prompt, completion, expected, desc):
+        result = prepend_signature(prompt, completion)
+        assert result == expected, f"Failed for {desc}: got {result!r}, expected {expected!r}"
 
 
 class TestCodeLineCounter:

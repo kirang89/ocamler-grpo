@@ -4,13 +4,19 @@ import subprocess
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
 
 import verifiers as vf
 from datasets import Dataset, load_dataset
 
 CODE_BLOCK_RE = re.compile(r"```(.*?)```", re.DOTALL)
 LANGUAGE_HINTS = {"ocaml", "ml", "language:ocaml"}
+# Pattern to extract function signature from prompt (the let/let rec ... = part after docstring)
+# Handles: literal \n, type definitions between *) and let, trailing whitespace/newlines
+FUNC_SIGNATURE_RE = re.compile(
+    r"(?:let|and)\s+(?:rec\s+)?(?P<name>\w+).*?=(?=(?:\s|\\n)*$)",
+    re.DOTALL,
+)
 MIN_NON_EMPTY_LINES = 2
 TYPE_CHECK_TIMEOUT = 5
 COMPILE_TIMEOUT = 10
@@ -42,6 +48,65 @@ class RewardResult:
 
 
 # Code Extraction Utilities
+
+
+def extract_function_signature(prompt: str) -> Tuple[str, str]:
+    """
+    Extract the function signature and name from an OCaml prompt.
+
+    Prompts typically contain a docstring followed by a function signature:
+        (**Compute the factorial...
+         * >>> factorial 5
+         * 120
+        *)
+        let rec factorial (n : int) : int =
+
+    This function extracts the signature line and the function name.
+
+    Args:
+        prompt: The full prompt text containing docstring and signature
+
+    Returns:
+        A tuple (signature_line, function_name).
+        Example: ("let rec factorial (n : int) : int =", "factorial")
+        Returns ("", "") if not found.
+    """
+    # Scan the last 300 characters to be efficient and avoid false positives
+    # from the middle of the prompt
+    search_text = prompt[-300:]
+    match = FUNC_SIGNATURE_RE.search(search_text)
+    if match:
+        return match.group(0).strip(), match.group("name")
+    return "", ""
+
+
+def prepend_signature(prompt: str, completion: str) -> str:
+    """
+    Prepend the function signature from the prompt to the completion if needed.
+
+    It extracts the signature from the prompt. If the completion does not start
+    with a redefinition of the same function, it prepends the signature.
+
+    Args:
+        prompt: The prompt text
+        completion: The model completion
+
+    Returns:
+        The completion with signature prepended if appropriate.
+    """
+    sig, name = extract_function_signature(prompt)
+    if not sig:
+        return completion
+
+    stripped = completion.strip()
+    if stripped.startswith("let"):
+        # Check for redefinition using regex to handle spacing/rec
+        # Regex: let (rec)? name
+        pattern = re.compile(rf"let\s+(?:rec\s+)?{re.escape(name)}\b")
+        if pattern.match(stripped):
+            return completion
+
+    return f"{sig}\n  {completion}"
 
 
 def extract_code_block(text: str) -> str:
@@ -504,6 +569,8 @@ __all__ = [
     "RewardResult",
     # Code extraction
     "extract_code_block",
+    "extract_function_signature",
+    "prepend_signature",
     "count_non_empty_code_lines",
     # Compilation functions
     "type_check_reward",

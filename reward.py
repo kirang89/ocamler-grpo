@@ -25,6 +25,8 @@ from environment import (
     compile_reward,
     count_non_empty_code_lines,
     extract_code_block,
+    extract_function_signature,
+    prepend_signature,
     is_degenerate_output,
     tests_reward,
     type_check_reward,
@@ -145,8 +147,11 @@ def make_syntax_aware_reward_vf(logger: RewardLogger | None) -> Callable:
         ids = problem_id or kwargs.get("problem_id") or []
         tests_list = kwargs.get("tests") or []
 
+        # Combine function signatures from prompts with completions
+        full_completions = [prepend_signature(p, c) for p, c in zip(prompts, completions)]
+
         # Score all completions in parallel
-        results = _compute_rewards_parallel(completions, ids, tests_list)
+        results = _compute_rewards_parallel(full_completions, ids, tests_list)
 
         # Build rewards and logs from results
         rewards = []

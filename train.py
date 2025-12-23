@@ -47,38 +47,52 @@ import torch
 
 PROMPT_TEMPLATE = textwrap.dedent(
     """
-    You are an expert OCaml engineer. Provide a solution to the problem below by following this EXACT format:
+    You are an expert OCaml engineer. Complete the function body below by following this EXACT format:
 
     1. Start with ```ocaml
-    2. Write ONLY the OCaml code solution
+    2. Write ONLY the function body (the code that comes after the = sign)
     3. End with ```
-    4. Do NOT include more than one code fence
-    4. Do NOT include ANY text before or after the code fence
-    5. Do NOT include explanations, comments outside code, or conversational text
+    4. Do NOT repeat the function signature - it is already provided
+    5. Do NOT explain the code or include ANY text before or after the code fence
 
-    Examples(for instruction only — do NOT copy these into your answer):
+    Examples (for instruction only — do NOT copy these into your answer):
 
-    Problem: Filter positive numbers from a list
-    ```ocaml
+    Problem:
+    (**Filter positive numbers from a list
+     * >>> filter_positive [1; -2; 3; -4]
+     * [1; 3]
+    *)
     let filter_positive (numbers : int list) : int list =
-      List.filter (fun x -> x > 0) numbers
+    Solution:
+    ```ocaml
+    List.filter (fun x -> x > 0) numbers
     ```
 
-    Problem: Count occurrences of a character in a string
-    ```ocaml
+    Problem:
+    (**Count occurrences of a character in a string
+     * >>> count_char "hello" 'l'
+     * 2
+    *)
     let count_char (s : string) (c : char) : int =
-      String.fold_left (fun acc ch -> if ch = c then acc + 1 else acc) 0 s
-    ```
-
-    Problem: Calculate the sum of all elements in a list
+    Solution:
     ```ocaml
-    let rec sum_list (lst : int list) : int =
-      match lst with
-      | [] -> 0
-      | head :: tail -> head + sum_list tail
+    String.fold_left (fun acc ch -> if ch = c then acc + 1 else acc) 0 s
     ```
 
-    Now solve this problem:
+    Problem:
+    (**Calculate the sum of all elements in a list
+     * >>> sum_list [1; 2; 3]
+     * 6
+    *)
+    let rec sum_list (lst : int list) : int =
+    Solution:
+    ```ocaml
+    match lst with
+    | [] -> 0
+    | head :: tail -> head + sum_list tail
+    ```
+
+    Now solve this problem and complete the provided function:
 
     Problem ({problem_id}):
     {question}
