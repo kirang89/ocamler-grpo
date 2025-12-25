@@ -15,7 +15,11 @@
       let
         pkgs = import nixpkgs {
           inherit system;
-          config.allowUnfree = true;
+          config = {
+            allowUnfree = true;
+            cudaSupport = system == "x86_64-linux";
+            cudaCapabilities = [ "8.6" ];
+          };
         };
 
         lib = pkgs.lib;
@@ -53,7 +57,7 @@
 
         darwinExtras = lib.optionals pkgs.stdenv.isDarwin [ ];
 
-        mkDevShell = llamaPkg:
+        mkDevShell = { llamaPkg, enableCuda ? false }:
           let
             # Create a wrapper for llama-server (Linux only, with CUDA setup)
             llamaServerWrapper = if pkgs.stdenv.isLinux then
@@ -92,6 +96,13 @@
             shellHook = ''
               # Use Nix's Python to avoid glibc conflicts
               export UV_PYTHON="${pkgs.python312}/bin/python3.12"
+
+              ${lib.optionalString enableCuda ''
+                # Build CUDA only for Nvidia A40 (compute capability 8.6).
+                export NIX_CUDA_ARCHITECTURES=86
+                export CMAKE_CUDA_ARCHITECTURES=86
+                export TORCH_CUDA_ARCH_LIST="8.6"
+              ''}
 
               ${lib.optionalString pkgs.stdenv.isLinux ''
                 # Add CUDA and libstdc++ to library path for PyTorch GPU support (Linux only)
@@ -137,10 +148,12 @@
           fi
         '';
       in {
-        devShells.default =
-          mkDevShell (if pkgs.stdenv.isLinux then llamaCppCuda else llamaCpp);
+        devShells.default = mkDevShell {
+          llamaPkg = if pkgs.stdenv.isLinux then llamaCppCuda else llamaCpp;
+          enableCuda = pkgs.stdenv.isLinux;
+        };
 
-        devShells.cuda = mkDevShell llamaCppCuda;
-        devShells.cpu = mkDevShell llamaCpp;
+        devShells.cuda = mkDevShell { llamaPkg = llamaCppCuda; enableCuda = true; };
+        devShells.cpu = mkDevShell { llamaPkg = llamaCpp; enableCuda = false; };
       });
 }
