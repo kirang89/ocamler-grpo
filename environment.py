@@ -395,16 +395,87 @@ def is_degenerate_output(completion: str, code: str) -> tuple[bool, list[str]]:
     if code_block_count > 4:  # More than 2 code block pairs
         reasons.append("code block spam")
 
-    # Signal 4: Stub solutions (failwith + "implement" in short code)
-    # Detects reward hacking like: failwith "Please implement the function."
-    # These pass type/compile checks but always fail tests
+    # Signal 4: Stub solutions
+    # Detects reward hacking patterns that pass type/compile but aren't real solutions
     code_lines = count_non_empty_code_lines(code)
     code_lower = code.lower()
-    if code_lines < 3 and "failwith" in code_lower and "implement" in code_lower:
-        reasons.append("stub solution")
+
+    # Common stub indicators in code or comments
+    stub_indicators = [
+        "placeholder",
+        "replace with",
+        "actual logic",
+        "not implemented",
+        "your code here",
+        "implement this",
+        "implement the",
+    ]
+
+    # Check for stub indicators anywhere in code (including comments)
+    has_stub_indicator = any(ind in code_lower for ind in stub_indicators)
+
+    # OCaml-specific stub patterns
+    has_assert_false = "assert false" in code_lower
+    has_failwith = "failwith" in code_lower
+    has_raise_failure = "raise" in code_lower and "failure" in code_lower
+
+    # Short code with stub indicators is definitely a stub
+    if code_lines < 5 and has_stub_indicator:
+        reasons.append("stub solution (indicator in comment)")
+
+    # Short code with assert false is almost always a placeholder
+    if code_lines < 5 and has_assert_false:
+        reasons.append("stub solution (assert false)")
+
+    # Short code with failwith/raise + stub indicator
+    if code_lines < 5 and (has_failwith or has_raise_failure) and has_stub_indicator:
+        reasons.append("stub solution (exception placeholder)")
+
+    # Very short code with failwith is suspicious even without explicit indicator
+    if code_lines < 3 and has_failwith:
+        reasons.append("stub solution (short failwith)")
 
     # Require 1+ signals to trigger penalty
     return len(reasons) >= 1, reasons
+
+
+def compute_solution_style_penalty(completion: str, code: str) -> tuple[float, list[str]]:
+    """
+    Compute small penalty for verbose but correct solutions.
+
+    Only applied when tests pass (base_reward == 1.0). Penalizes:
+    - Multiple code blocks (should be exactly one)
+    - Prose/explanation after the final code block
+
+    Args:
+        completion: Full completion text
+        code: Extracted code block
+
+    Returns:
+        Tuple of (penalty: 0.0-0.10, reasons: list of detected issues)
+    """
+    reasons = []
+    penalty = 0.0
+
+    # Check 1: Multiple code blocks (ideal is exactly one)
+    code_block_count = len(CODE_BLOCK_RE.findall(completion))
+    if code_block_count > 1:
+        extra_blocks = code_block_count - 1
+        penalty += 0.02 * extra_blocks
+        reasons.append(f"{code_block_count} code blocks")
+
+    # Check 2: Trailing prose after the final code block
+    last_fence = completion.rfind("```")
+    if last_fence != -1:
+        after_code = completion[last_fence + 3 :].strip()
+        if len(after_code) > 30:
+            penalty += 0.03
+            reasons.append("trailing prose")
+
+    # Cap total penalty at 0.10
+    penalty = min(penalty, 0.10)
+
+    return penalty, reasons
 
 
 # ============================================================================
@@ -555,8 +626,9 @@ __all__ = [
     "type_check_reward",
     "compile_reward",
     "tests_reward",
-    # Degenerate detection
+    # Degenerate and style detection
     "is_degenerate_output",
+    "compute_solution_style_penalty",
     # Reward function
     "ocaml_reward",
     # Dataset and environment

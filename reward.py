@@ -23,11 +23,12 @@ from environment import (
     MIN_NON_EMPTY_LINES,
     RewardResult,
     compile_reward,
+    compute_solution_style_penalty,
     count_non_empty_code_lines,
     extract_code_block,
     extract_function_signature,
-    prepend_signature,
     is_degenerate_output,
+    prepend_signature,
     tests_reward,
     type_check_reward,
 )
@@ -229,10 +230,19 @@ def _score_completion_vf(
     is_degenerate, degenerate_reasons = is_degenerate_output(completion, code)
     total_reward = base_reward * 0.3 if is_degenerate else base_reward
 
+    # Apply style penalty for passing solutions (only when not degenerate)
+    style_penalty = 0.0
+    style_reasons = []
+    if base_reward == 1.0 and not is_degenerate:
+        style_penalty, style_reasons = compute_solution_style_penalty(completion, code)
+        total_reward = total_reward - style_penalty
+
     # Build reason for reward < 1
     reason = None
     if total_reward < 1.0:
-        if degenerate_reasons:
+        if style_reasons:
+            reason = "style: " + ", ".join(style_reasons)
+        elif degenerate_reasons:
             reason = ", ".join(degenerate_reasons)
         elif test_result.score == 0.0 and compile_succeeded:
             reason = "test failure"
@@ -258,6 +268,8 @@ def _score_completion_vf(
         "prose_penalty_applied": is_degenerate,
         "is_degenerate": is_degenerate,
         "degenerate_reasons": degenerate_reasons,
+        "style_penalty": float(style_penalty),
+        "style_reasons": style_reasons,
         "reason": reason,
         "timeout_stage": timeout_stage,
         "passed": bool(test_result.score >= 0.65),
@@ -289,6 +301,8 @@ def _build_detailed_log_entry(pid: str, completion: str, result: Dict[str, Any])
         "error_sample": result.get("error_details"),
         "prose_penalty_applied": result["prose_penalty_applied"],
         "is_degenerate": result["is_degenerate"],
+        "style_penalty": result.get("style_penalty", 0.0),
+        "style_reasons": result.get("style_reasons", []),
         "preview": completion[:200],
     }
     if result["timeout_stage"]:
@@ -318,6 +332,7 @@ def _build_completion_log_entry(
         "base_reward": float(result["base_reward"]),
         "length": len(completion),
         "prose_penalty_applied": result["prose_penalty_applied"],
+        "style_penalty": result.get("style_penalty", 0.0),
         "completion": completion,
     }
     if result["timeout_stage"]:

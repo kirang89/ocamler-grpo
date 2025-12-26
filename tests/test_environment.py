@@ -298,20 +298,37 @@ class TestDegenerateDetection:
         stub = 'let rec sort_array (arr : int list) : int list = failwith "Please implement the sort_array function."'
         is_deg, reasons = is_degenerate_output(stub, stub)
         assert is_deg is True
-        assert "stub solution" in reasons
+        assert any(r.startswith("stub solution") for r in reasons)
 
         stub2 = '''let sort_array arr =
   failwith "implement me"'''
         is_deg, reasons = is_degenerate_output(stub2, stub2)
         assert is_deg is True
-        assert "stub solution" in reasons
+        assert any(r.startswith("stub solution") for r in reasons)
 
+        # Longer code with failwith should not trigger (could be legitimate error handling)
         stub3 = '''let sort_array arr =
   let x = 1 in
   failwith "implement later"'''
         is_deg, reasons = is_degenerate_output(stub3, stub3)
         assert is_deg is False
-        assert "stub solution" not in reasons
+        assert not any(r.startswith("stub solution") for r in reasons)
+
+    def test_placeholder_comment_detection(self):
+        """Test placeholder comments in short code are detected."""
+        stub = '''let determine_convexity (terms : (float * int * int) list) (n : int) : string =
+  "Convex" (* placeholder, replace with actual logic *)'''
+        is_deg, reasons = is_degenerate_output(stub, stub)
+        assert is_deg is True
+        assert any(r.startswith("stub solution") for r in reasons)
+
+    def test_assert_false_detection(self):
+        """Test assert false placeholders are detected."""
+        stub = '''let solve x =
+  assert false'''
+        is_deg, reasons = is_degenerate_output(stub, stub)
+        assert is_deg is True
+        assert "stub solution (assert false)" in reasons
 
     def test_clean_code_passes(self):
         """Test clean, valid code is not marked as degenerate."""
