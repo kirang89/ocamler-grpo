@@ -99,7 +99,6 @@ PROMPT_TEMPLATE = textwrap.dedent(
     """
 ).strip()
 
-DEFAULT_MODEL_ID = "Qwen/Qwen2.5-Coder-1.5B-Instruct"
 TRAINING_DATASET = os.environ.get("TRAINING_DATASET", "kiranpg/ocaml-training-problems")
 GRPO_OUTPUT_DIR = os.environ.get("GRPO_OUTPUT_DIR", "grpo_runs")
 
@@ -268,17 +267,10 @@ def create_lora_config() -> LoraConfig:
 
 def resolve_model_id() -> str:
     """Return a Hugging Face model identifier suitable for GRPO training."""
-    candidate = os.environ.get("GRPO_MODEL_ID") or os.environ.get("HF_MODEL_ID")
-    if candidate:
-        candidate = candidate.strip()
-        if not candidate:
-            raise ValueError("GRPO_MODEL_ID was provided but empty.")
-        if ":" in candidate:
-            raise ValueError(
-                f"GRPO_MODEL_ID must be a Hugging Face repo id (no ':' characters). Got: {candidate}"
-            )
-        return candidate
-    return DEFAULT_MODEL_ID
+    candidate = os.environ.get("BASE_MODEL_ID", "").strip()
+    if not candidate:
+        raise ValueError("BASE_MODEL_ID environment variable is required")
+    return candidate
 
 
 def main():

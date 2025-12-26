@@ -53,6 +53,36 @@ Fine-tune the base model (default: Qwen2.5-Coder) using GRPO:
 
 This starts the model training using the [default training dataset](https://huggingface.co/datasets/kiranpg/ocaml-training-problems) in the background and logs to `training.log`.
 
+## Post-Training
+
+### Merging the Adapter
+
+After training, merge the LoRA adapter into the base model to create a standalone model:
+
+```bash
+uv run scripts/merge_adapter.py <checkpoint-path>
+```
+
+This requires `BASE_MODEL_ID` to be set in `.envrc`.
+
+### Converting to GGUF
+
+To convert the merged model to GGUF format for use with llama.cpp:
+
+1. Clone llama.cpp:
+   ```bash
+   git clone --depth 1 https://github.com/ggerganov/llama.cpp.git
+   ```
+
+2. Install dependencies and convert:
+   ```bash
+   pip install -r llama.cpp/requirements.txt
+
+   python llama.cpp/convert_hf_to_gguf.py merged_model --outfile model.gguf
+
+   # or quantize for smaller size
+   llama.cpp/llama-quantize model.gguf model-q4_k_m.gguf Q4_K_M
+   ```
 
 ## Evaluate Model Performance
 
