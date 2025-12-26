@@ -229,6 +229,17 @@
             background: transparent;
         }
 
+        .reward-reason {
+            padding: 0 16px 16px;
+            color: var(--subtitle-color);
+            font-size: 0.85rem;
+        }
+
+        .reward-reason strong {
+            color: var(--text-color);
+            font-weight: 600;
+        }
+
         .empty {
             text-align: center;
             padding: 40px;
@@ -356,6 +367,7 @@
                 const baseReward = Number.isFinite(comp.base_reward) ? comp.base_reward.toFixed(3) : 'N/A';
                 const length = Number.isFinite(comp.length) ? comp.length : 'N/A';
                 const totalRewardCss = Number.isFinite(comp.reward) && Math.trunc(comp.reward) === 1 ? 'good' : '';
+                const reason = typeof comp.reason === 'string' ? comp.reason.trim() : '';
 
                 const headerHtml = `
                     <div class="card-header">
@@ -374,6 +386,12 @@
                 code.textContent = comp.completion || '';
                 pre.appendChild(code);
                 card.appendChild(pre);
+                if (reason) {
+                    const reasonEl = document.createElement('div');
+                    reasonEl.className = 'reward-reason';
+                    reasonEl.innerHTML = `<strong>Reward Reason:</strong> ${reason}`;
+                    card.appendChild(reasonEl);
+                }
                 cards.appendChild(card);
             });
 
