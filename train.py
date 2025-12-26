@@ -210,9 +210,24 @@ def create_grpo_config(temperature=None) -> GRPOConfig:
     model_init_kwargs = {
         "torch_dtype": torch.bfloat16 if use_bf16 else torch.float32,
     }
-    # Enable Flash Attention 2 if available (requires flash-attn package on Linux)
-    if os.environ.get("GRPO_USE_FLASH_ATTN", "true").lower() == "true":
-        model_init_kwargs["attn_implementation"] = "flash_attention_2"
+    # Enable Flash Attention 2 if available (requires flash-attn package on Linux + Ampere+ GPU)
+    use_flash_attn = os.environ.get("GRPO_USE_FLASH_ATTN", "true").lower() == "true"
+    if use_flash_attn:
+        # Check platform and GPU compatibility
+        if sys.platform != "linux":
+            print("Flash Attention 2 requires Linux. Using default attention.")
+        elif not cuda_available:
+            print("Flash Attention 2 requires CUDA. Using default attention.")
+        else:
+            # Check for Ampere+ GPU (compute capability >= 8.0)
+            compute_capability = torch.cuda.get_device_capability()
+            if compute_capability[0] < 8:
+                print(
+                    f"Flash Attention 2 requires Ampere+ GPU (compute >= 8.0), "
+                    f"found {compute_capability[0]}.{compute_capability[1]}. Using default attention."
+                )
+            else:
+                model_init_kwargs["attn_implementation"] = "flash_attention_2"
 
     return GRPOConfig(
         temperature=temperature,  # for training diversity
@@ -332,10 +347,13 @@ def main():
     )
 
     # Optional: torch.compile for faster forward passes (10-30% speedup after warmup)
-    # Enable with GRPO_USE_TORCH_COMPILE=true
+    # Enable with GRPO_USE_TORCH_COMPILE=true (Linux only, requires Triton)
     if os.environ.get("GRPO_USE_TORCH_COMPILE", "false").lower() == "true":
-        print("Compiling model with torch.compile (mode=reduce-overhead)...")
-        trainer.model = torch.compile(trainer.model, mode="reduce-overhead")
+        if sys.platform != "linux":
+            print("torch.compile with mode='reduce-overhead' requires Linux. Skipping.")
+        else:
+            print("Compiling model with torch.compile (mode=reduce-overhead)...")
+            trainer.model = torch.compile(trainer.model, mode="reduce-overhead")
 
     trainer.train(resume_from_checkpoint=last_checkpoint)
 
