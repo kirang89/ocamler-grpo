@@ -16,10 +16,14 @@ DEFAULT_LOG_FILE = os.path.join(os.path.dirname(SCRIPT_DIR), "grpo_runs/learning
 DEFAULT_ERROR_LOG = os.path.join(
     os.path.dirname(SCRIPT_DIR), "grpo_runs/reward_logs/syntax_aware_breakdown.jsonl"
 )
+DEFAULT_COMPLETIONS_FILE = os.path.join(
+    os.path.dirname(SCRIPT_DIR), "grpo_runs", "reward_logs", "completions.jsonl"
+)
 PORT = 8080
 # Optional batch metrics file (derived from LOG_FILE if not provided)
 BATCH_METRICS_FILE = None
 ERROR_LOG_FILE = DEFAULT_ERROR_LOG
+COMPLETIONS_FILE = DEFAULT_COMPLETIONS_FILE
 
 # Cache for training parameters
 CACHED_PARAMS = None
@@ -356,6 +360,25 @@ def parse_error_log(log_path: str):
     return result
 
 
+def parse_completions_jsonl(jsonl_path: str):
+    entries = []
+    try:
+        with open(jsonl_path, "r") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entries.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    except FileNotFoundError:
+        return {"error": f"Completions file {jsonl_path} not found."}
+    except OSError as exc:
+        return {"error": f"Error reading completions file: {exc}"}
+    return entries
+
+
 class DashboardHandler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=DASHBOARD_DIR, **kwargs)
@@ -371,6 +394,13 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             data["pass_metrics"] = parse_batch_metrics(BATCH_METRICS_FILE)
             data["training_params"] = get_training_params()
             data["error_metrics"] = parse_error_log(ERROR_LOG_FILE)
+            self.wfile.write(json.dumps(data).encode())
+        elif parsed.path == "/api/completions":
+            self.send_response(200)
+            self.send_header("Content-type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            data = parse_completions_jsonl(COMPLETIONS_FILE)
             self.wfile.write(json.dumps(data).encode())
         else:
             super().do_GET()
@@ -392,6 +422,12 @@ if __name__ == "__main__":
         default=DEFAULT_ERROR_LOG,
         help="Path to syntax_aware_breakdown.jsonl (defaults to repo root or reward_logs)",
     )
+    parser.add_argument(
+        "--completions",
+        type=str,
+        default=DEFAULT_COMPLETIONS_FILE,
+        help="Path to completions.jsonl (defaults to latest-run/completions.jsonl)",
+    )
     args = parser.parse_args()
 
     LOG_FILE = args.log
@@ -401,11 +437,13 @@ if __name__ == "__main__":
         log_dir = os.path.dirname(LOG_FILE)
         BATCH_METRICS_FILE = os.path.join(log_dir, "reward_logs", "batch_metrics.jsonl")
     ERROR_LOG_FILE = args.error_log
+    COMPLETIONS_FILE = args.completions
 
     print("Starting dashboard server...")
     print(f"  Log file: {LOG_FILE}")
     print(f"  Batch metrics: {BATCH_METRICS_FILE}")
     print(f"  Error log: {resolve_error_log_path(ERROR_LOG_FILE) or ERROR_LOG_FILE}")
+    print(f"  Completions: {COMPLETIONS_FILE}")
     print(f"  Dashboard: http://localhost:{args.port}")
 
     # Create dashboard directory if it doesn't exist, just in case

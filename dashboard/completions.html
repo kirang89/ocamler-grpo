@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Completions Viewer</title>
+    <link id="hljsLight" rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-light.min.css">
+    <link id="hljsDark" rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css" disabled>
+    <style>
+        :root {
+            --bg-color: #0f0f1a;
+            --text-color: #e0e0e0;
+            --card-bg: #1a1a2e;
+            --subtitle-color: #888;
+            --grid-color: #333;
+            --pill-bg: #111827;
+            --pill-border: #2f2f4a;
+        }
+
+        [data-theme="light"] {
+            --bg-color: #f3f4f6;
+            --text-color: #1f2937;
+            --card-bg: #ffffff;
+            --subtitle-color: #6b7280;
+            --grid-color: #e5e7eb;
+            --pill-bg: #f9fafb;
+            --pill-border: #e5e7eb;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg-color);
+            color: var(--text-color);
+            padding: 20px;
+            min-height: 100vh;
+            transition: background-color 0.3s, color 0.3s;
+        }
+
+        header {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+            align-items: center;
+            margin-bottom: 24px;
+            max-width: 1800px;
+            margin-left: auto;
+            margin-right: auto;
+            padding: 0 10px;
+            gap: 16px;
+        }
+
+        .header-content {
+            text-align: left;
+        }
+
+        h1 {
+            font-size: 1.8rem;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .subtitle {
+            color: var(--subtitle-color);
+            font-size: 0.9rem;
+        }
+
+        .header-nav {
+            display: flex;
+            justify-content: center;
+            justify-self: center;
+        }
+
+        .nav-button {
+            background: var(--card-bg);
+            border: 1px solid var(--grid-color);
+            color: var(--text-color);
+            height: 40px;
+            padding: 0 14px;
+            border-radius: 10px;
+            text-decoration: none;
+            font-size: 0.9rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            min-width: 210px;
+            transition: all 0.2s;
+        }
+
+        .nav-button:hover {
+            opacity: 0.85;
+        }
+
+        .theme-toggle {
+            background: var(--card-bg);
+            border: 1px solid var(--grid-color);
+            color: var(--text-color);
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: all 0.2s;
+            justify-self: end;
+        }
+
+        .theme-toggle:hover {
+            opacity: 0.8;
+        }
+
+        .container {
+            max-width: 1800px;
+            margin: 0 auto;
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+        }
+
+        #cards {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .note {
+            margin-left: 6px;
+            font-size: 0.85rem;
+            color: var(--subtitle-color);
+        }
+
+        .controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            align-items: center;
+            justify-content: space-between;
+            background: transparent;
+            padding: 0;
+            border-radius: 0;
+            border: none;
+        }
+
+        .control-buttons {
+            display: flex;
+            gap: 10px;
+        }
+
+        .control-buttons button {
+            background: var(--pill-bg);
+            border: 1px solid var(--grid-color);
+            color: var(--text-color);
+            width: 40px;
+            height: 40px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .control-buttons button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .pill {
+            background: var(--pill-bg);
+            border: 1px solid var(--pill-border);
+            padding: 6px 12px;
+            border-radius: 999px;
+            font-size: 0.85rem;
+            color: var(--subtitle-color);
+        }
+
+        .card {
+            background: var(--card-bg);
+            border-radius: 12px;
+            padding: 0;
+            border: 1px solid var(--grid-color);
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+
+        .card-header {
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--grid-color);
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .card-title {
+            font-weight: 600;
+        }
+
+        .metrics {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .metric {
+            padding: 4px 10px;
+            border-radius: 0;
+            font-size: 0.8rem;
+            border: none;
+            background: transparent;
+        }
+
+        .metric.good { border-color: #15803d; color: #15803d; font-weight: 600; }
+        .metric.mid { border-color: #fbbf24; color: #fbbf24; }
+        .metric.bad { border-color: #f472b6; color: #f472b6; }
+
+        pre {
+            margin: 0;
+            padding: 16px;
+            background: transparent;
+            font-family: "SF Mono", "Fira Code", "Iosevka", "Cascadia Mono", monospace;
+            font-size: 13px;
+            line-height: 1.5;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        pre code.hljs {
+            background: transparent;
+        }
+
+        .empty {
+            text-align: center;
+            padding: 40px;
+            color: var(--subtitle-color);
+        }
+
+        @media (max-width: 900px) {
+            header {
+                display: flex;
+                flex-direction: column;
+                align-items: flex-start;
+            }
+
+            .header-nav {
+                justify-content: flex-start;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="header-content">
+            <h1>Completions Viewer</h1>
+            <p class="subtitle">Step <span id="currentStep">0</span> of <span id="totalSteps">0</span><span class="note">(latest first)</span></p>
+            <p class="subtitle">Problem: <span id="problemId">-</span></p>
+        </div>
+        <div class="header-nav">
+            <a class="nav-button" href="/index.html" title="Training Dashboard" aria-label="Training Dashboard">📊 <span>Training Dashboard</span></a>
+        </div>
+        <button id="themeToggle" class="theme-toggle">Switch Theme</button>
+    </header>
+
+    <div class="container">
+        <div class="controls">
+            <div class="control-buttons">
+                <button id="btnPrev" title="Previous" aria-label="Previous">←</button>
+                <button id="btnNext" title="Next" aria-label="Next">→</button>
+            </div>
+            <div id="stepMeta" class="pill">Loading completions...</div>
+        </div>
+        <div id="cards"></div>
+    </div>
+
+    <script>
+        let groups = [];
+        let currentIndex = 0;
+
+        const cards = document.getElementById('cards');
+        const currentStepSpan = document.getElementById('currentStep');
+        const totalStepsSpan = document.getElementById('totalSteps');
+        const problemIdSpan = document.getElementById('problemId');
+        const stepMeta = document.getElementById('stepMeta');
+        const btnPrev = document.getElementById('btnPrev');
+        const btnNext = document.getElementById('btnNext');
+        const hljsLight = document.getElementById('hljsLight');
+        const hljsDark = document.getElementById('hljsDark');
+
+        function initTheme() {
+            const savedTheme = localStorage.getItem('theme') || 'dark';
+            document.documentElement.setAttribute('data-theme', savedTheme);
+            updateToggleButton(savedTheme);
+            updateHighlightTheme(savedTheme);
+        }
+
+        function toggleTheme() {
+            const currentTheme = document.documentElement.getAttribute('data-theme');
+            const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+            document.documentElement.setAttribute('data-theme', newTheme);
+            localStorage.setItem('theme', newTheme);
+            updateToggleButton(newTheme);
+            updateHighlightTheme(newTheme);
+        }
+
+        function updateToggleButton(theme) {
+            const btn = document.getElementById('themeToggle');
+            btn.textContent = theme === 'light' ? '🌙 Dark Mode' : '☀️ Light Mode';
+        }
+
+        function updateHighlightTheme(theme) {
+            const isLight = theme === 'light';
+            hljsLight.disabled = !isLight;
+            hljsDark.disabled = isLight;
+        }
+
+        function groupByProblemId(items) {
+            const result = [];
+            let current = null;
+            for (const item of items) {
+                if (!current || current.problem_id !== item.problem_id) {
+                    current = { problem_id: item.problem_id, completions: [] };
+                    result.push(current);
+                }
+                current.completions.push(item);
+            }
+            return result;
+        }
+
+        function rewardClass(value) {
+            if (value >= 0.8) return 'good';
+            if (value >= 0.2) return 'mid';
+            return 'bad';
+        }
+
+        function render() {
+            if (groups.length === 0) {
+                cards.innerHTML = '<div class="empty">No completions found.</div>';
+                return;
+            }
+
+            const group = groups[currentIndex];
+            currentStepSpan.textContent = currentIndex + 1;
+            totalStepsSpan.textContent = groups.length;
+            problemIdSpan.textContent = group.problem_id || '-';
+
+            btnPrev.disabled = currentIndex === 0;
+            btnNext.disabled = currentIndex >= groups.length - 1;
+            stepMeta.textContent = `Generations: ${group.completions.length}`;
+
+            cards.innerHTML = '';
+            group.completions.forEach((comp, idx) => {
+                const card = document.createElement('div');
+                card.className = 'card';
+
+                const reward = Number.isFinite(comp.reward) ? comp.reward.toFixed(3) : 'N/A';
+                const baseReward = Number.isFinite(comp.base_reward) ? comp.base_reward.toFixed(3) : 'N/A';
+                const length = Number.isFinite(comp.length) ? comp.length : 'N/A';
+                const totalRewardCss = Number.isFinite(comp.reward) && Math.trunc(comp.reward) === 1 ? 'good' : '';
+
+                const headerHtml = `
+                    <div class="card-header">
+                        <div class="card-title">Generation ${idx + 1}</div>
+                        <div class="metrics">
+                            <span class="metric ${totalRewardCss}">Total Reward: ${reward}</span>
+                            <span class="metric">Base Reward: ${baseReward}</span>
+                            <span class="metric">Len: ${length}</span>
+                        </div>
+                    </div>
+                `;
+
+                card.innerHTML = headerHtml;
+                const pre = document.createElement('pre');
+                const code = document.createElement('code');
+                code.textContent = comp.completion || '';
+                pre.appendChild(code);
+                card.appendChild(pre);
+                cards.appendChild(card);
+            });
+
+            if (window.hljs) {
+                cards.querySelectorAll('pre code').forEach((block) => {
+                    window.hljs.highlightElement(block);
+                });
+            }
+        }
+
+        function prevStep() {
+            if (currentIndex > 0) {
+                currentIndex -= 1;
+                render();
+            }
+        }
+
+        function nextStep() {
+            if (currentIndex < groups.length - 1) {
+                currentIndex += 1;
+                render();
+            }
+        }
+
+        async function loadCompletions() {
+            try {
+                const response = await fetch('/api/completions');
+                const data = await response.json();
+                groups = groupByProblemId(data).reverse();
+                currentIndex = 0;
+                render();
+            } catch (err) {
+                cards.innerHTML = `<div class="empty">Failed to load completions: ${err.message}</div>`;
+            }
+        }
+
+        document.getElementById('themeToggle').addEventListener('click', toggleTheme);
+        btnPrev.addEventListener('click', prevStep);
+        btnNext.addEventListener('click', nextStep);
+        document.addEventListener('keydown', (event) => {
+            if (event.key === 'ArrowRight') nextStep();
+            if (event.key === 'ArrowLeft') prevStep();
+        });
+
+        initTheme();
+        loadCompletions();
+    </script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/ocaml.min.js"></script>
+</body>
+</html>

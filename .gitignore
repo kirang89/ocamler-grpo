@@ -21,6 +21,8 @@ metrics.csv
 *.log
 
 # Training Data
-grpo_runs/
+grpo_runs/*
 data/
 *.tar
+*.jsonl
+

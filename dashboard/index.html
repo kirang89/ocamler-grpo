@@ -36,14 +36,15 @@
             transition: background-color 0.3s, color 0.3s;
         }
         header {
-            display: flex;
-            justify-content: space-between;
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
             align-items: center;
             margin-bottom: 24px;
             max-width: 1800px;
             margin-left: auto;
             margin-right: auto;
             padding: 0 10px;
+            gap: 16px;
         }
         .header-content {
             text-align: left;
@@ -57,6 +58,30 @@
             color: var(--subtitle-color);
             font-size: 0.9rem;
         }
+        .header-nav {
+            display: flex;
+            justify-content: center;
+            justify-self: center;
+        }
+        .nav-button {
+            background: var(--card-bg);
+            border: 1px solid var(--grid-color);
+            color: var(--text-color);
+            height: 40px;
+            padding: 0 14px;
+            border-radius: 10px;
+            text-decoration: none;
+            font-size: 0.9rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            min-width: 210px;
+            transition: all 0.2s;
+        }
+        .nav-button:hover {
+            opacity: 0.85;
+        }
         .theme-toggle {
             background: var(--card-bg);
             border: 1px solid var(--grid-color);
@@ -66,6 +91,7 @@
             cursor: pointer;
             font-size: 0.9rem;
             transition: all 0.2s;
+            justify-self: end;
         }
         .theme-toggle:hover {
             opacity: 0.8;
@@ -139,6 +165,17 @@
             text-align: left;
             color: var(--text-color);
         }
+        @media (max-width: 900px) {
+            header {
+                display: flex;
+                flex-direction: column;
+                align-items: flex-start;
+            }
+
+            .header-nav {
+                justify-content: flex-start;
+            }
+        }
     </style>
 </head>
 <body>
@@ -147,6 +184,9 @@
             <h1>GRPO Training Dashboard</h1>
             <p class="subtitle">Epoch: <span id="epochNumber">Loading...</span></p>
             <p class="subtitle">Last updated: <span id="timestamp">Loading...</span></p>
+        </div>
+        <div class="header-nav">
+            <a class="nav-button" href="/completions.html" title="Completions Viewer" aria-label="Completions Viewer">🧾 <span>Completions Viewer</span></a>
         </div>
         <button id="themeToggle" class="theme-toggle">Switch Theme</button>
     </header>
