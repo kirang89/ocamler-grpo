@@ -20,6 +20,7 @@ dependencies = [
 cuda = [
     "torch>=2.6.0",
     "torchvision>=0.21.0",
+    "flash-attn>=2.5.0; sys_platform == 'linux'",
 ]
 
 [[tool.uv.index]]

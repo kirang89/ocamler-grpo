@@ -206,6 +206,14 @@ def create_grpo_config(temperature=None) -> GRPOConfig:
     # achieves similar performance to all tokens while improving efficiency
     top_entropy_quantile = float(os.environ.get("GRPO_TOP_ENTROPY_QUANTILE", "0.2"))
 
+    # Model initialization kwargs for Flash Attention 2 (20-40% faster attention)
+    model_init_kwargs = {
+        "torch_dtype": torch.bfloat16 if use_bf16 else torch.float32,
+    }
+    # Enable Flash Attention 2 if available (requires flash-attn package on Linux)
+    if os.environ.get("GRPO_USE_FLASH_ATTN", "true").lower() == "true":
+        model_init_kwargs["attn_implementation"] = "flash_attention_2"
+
     return GRPOConfig(
         temperature=temperature,  # for training diversity
         top_p=0.95,
@@ -234,6 +242,7 @@ def create_grpo_config(temperature=None) -> GRPOConfig:
         dataloader_pin_memory=True,
         beta=beta,
         top_entropy_quantile=top_entropy_quantile,  # Focus training on high-entropy tokens
+        model_init_kwargs=model_init_kwargs,
     )
 
 
@@ -274,6 +283,14 @@ def resolve_model_id() -> str:
 
 
 def main():
+    # CUDA optimizations for faster training (10-20% speedup on Ampere+ GPUs)
+    if torch.cuda.is_available():
+        # Enable TF32 for faster matmuls on Ampere+ GPUs (A40, RTX 30xx/40xx, etc.)
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        # Enable cudnn benchmark for consistent input sizes (finds optimal algorithms)
+        torch.backends.cudnn.benchmark = True
+
     model_id = resolve_model_id()
     dataset = build_training_dataset(TRAINING_DATASET)
     tokenizer = create_tokenizer(model_id)
@@ -313,6 +330,12 @@ def main():
         peft_config=lora_config,
         callbacks=[learning_callback],
     )
+
+    # Optional: torch.compile for faster forward passes (10-30% speedup after warmup)
+    # Enable with GRPO_USE_TORCH_COMPILE=true
+    if os.environ.get("GRPO_USE_TORCH_COMPILE", "false").lower() == "true":
+        print("Compiling model with torch.compile (mode=reduce-overhead)...")
+        trainer.model = torch.compile(trainer.model, mode="reduce-overhead")
 
     trainer.train(resume_from_checkpoint=last_checkpoint)
 
