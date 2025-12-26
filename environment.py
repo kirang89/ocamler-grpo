@@ -345,61 +345,32 @@ def tests_reward(workdir: Path, executable_name: str) -> RewardResult:
 # ============================================================================
 
 
-def is_degenerate_output(completion: str, code: str) -> bool:
+def is_degenerate_output(completion: str, code: str) -> tuple[bool, list[str]]:
     """
     Multi-signal detection for degenerate outputs (prose, gibberish, spam).
 
-    Returns True if output appears degenerate (1+ signals detected).
+    Returns tuple of (is_degenerate, reasons) where reasons lists detected issues.
     Can be disabled via GRPO_DISABLE_PROSE_PENALTY environment variable.
 
     This function detects:
-    - Natural language prose (conversational patterns)
-    - Low OCaml keyword density (gibberish)
     - Repetitive patterns (spam)
     - Low code purity (too much wrapper text)
     - Markdown code block spam (too many ``` markers)
+    - Stub solutions (failwith + "implement" in short code)
 
     Args:
         completion: Full completion text
         code: Extracted code block
 
     Returns:
-        True if degenerate output detected, False otherwise
+        Tuple of (is_degenerate: bool, reasons: list of detected issues)
     """
     if os.environ.get("GRPO_DISABLE_PROSE_PENALTY") == "true":
-        return False
+        return False, []
 
-    issues = 0
+    reasons = []
 
-    # Signal 1: Conversational prose patterns
-    PROSE_PATTERNS = [
-        r"To solve this",
-        r"Here'?s",
-        r"I apologize",
-        r"Let me",
-        r"You can use",
-        r"The solution",
-        r"This (approach|implementation|works|method)",
-        r"[.!?]\s+[A-Z]",  # Multiple sentences (prose structure)
-    ]
-
-    for pattern in PROSE_PATTERNS:
-        if re.search(pattern, completion, re.IGNORECASE):
-            issues += 1
-            break  # Only count once for prose patterns
-
-    # Signal 2: Low OCaml keyword density (indicates gibberish)
-    if code:
-        keywords = len(
-            re.findall(r"\b(let|match|with|if|then|else|fun|rec|type|val|module|open|in)\b", code)
-        )
-        code_tokens = len(code.split())
-        keyword_density = keywords / code_tokens if code_tokens > 0 else 0
-
-        if keyword_density < 0.05:  # Real OCaml code has ~10-20% keyword density
-            issues += 1
-
-    # Signal 3: Highly repetitive content (spam patterns)
+    # Signal 1: Highly repetitive content (spam patterns)
     if len(completion) > 100:
         # Check for repeated 50-char chunks
         chunks = [completion[i : i + 50] for i in range(0, len(completion) - 50, 25)]
@@ -408,24 +379,32 @@ def is_degenerate_output(completion: str, code: str) -> bool:
             repetition_ratio = unique_chunks / len(chunks) if chunks else 1.0
 
             if repetition_ratio < 0.3:  # >70% repetition
-                issues += 1
+                reasons.append("repetitive content")
 
-    # Signal 4: Low code purity (too much wrapper text)
+    # Signal 2: Low code purity (too much wrapper text)
     if len(code) > 0 and len(completion) > 0:
         code_purity = len(code) / len(completion)
 
         if code_purity < 0.5:  # Less than half is actual code
-            issues += 1
+            reasons.append("low code ratio")
 
-    # Signal 5: Markdown code block spam (too many ``` markers)
+    # Signal 3: Markdown code block spam (too many ``` markers)
     code_block_count = completion.count("```")
     # Each code block has 2 markers (opening and closing), so count pairs
     # Legitimate completions should have at most 1-2 code blocks (2-4 markers)
     if code_block_count > 4:  # More than 2 code block pairs
-        issues += 1
+        reasons.append("code block spam")
+
+    # Signal 4: Stub solutions (failwith + "implement" in short code)
+    # Detects reward hacking like: failwith "Please implement the function."
+    # These pass type/compile checks but always fail tests
+    code_lines = count_non_empty_code_lines(code)
+    code_lower = code.lower()
+    if code_lines < 3 and "failwith" in code_lower and "implement" in code_lower:
+        reasons.append("stub solution")
 
     # Require 1+ signals to trigger penalty
-    return issues >= 1
+    return len(reasons) >= 1, reasons
 
 
 # ============================================================================
@@ -482,7 +461,7 @@ def ocaml_reward(completion: str, info: Dict[str, Any], state: Dict[str, Any]) -
     base_reward = type_check_result.score + compile_result.score + test_result.score
 
     # Apply degenerate output penalty
-    is_degenerate = is_degenerate_output(completion, code)
+    is_degenerate, _ = is_degenerate_output(completion, code)
     total_reward = base_reward * 0.3 if is_degenerate else base_reward
 
     return float(total_reward)

@@ -15,9 +15,9 @@ from environment import (
     count_non_empty_code_lines,
     extract_code_block,
     extract_function_signature,
-    prepend_signature,
     is_degenerate_output,
     ocaml_reward,
+    prepend_signature,
     tests_reward,
     type_check_reward,
 )
@@ -168,7 +168,12 @@ SIGNATURE_TEST_CASES = [
     # No signature - just text
     ("Just some text without a function signature", "", "", "no signature"),
     # No docstring
-    ("let rec factorial (n : int) : int =", "let rec factorial (n : int) : int =", "factorial", "no docstring"),
+    (
+        "let rec factorial (n : int) : int =",
+        "let rec factorial (n : int) : int =",
+        "factorial",
+        "no docstring",
+    ),
     # Literal \n (as in CSV) instead of actual newline
     (
         "(**Doc*)\\nlet rec factorial (n : int) : int =",
@@ -261,35 +266,13 @@ class TestDegenerateDetection:
         if old_value is not None:
             os.environ["GRPO_DISABLE_PROSE_PENALTY"] = old_value
 
-    def test_prose_detection(self):
-        """Test prose conversational patterns are detected."""
-        code = "let x = 1"
-
-        # Various prose patterns
-        prose_examples = [
-            "Here's the solution: ```ocaml\nlet x = 1\n```",
-            "To solve this problem:\n```ocaml\nlet x = 1\n```",
-            "I apologize, but here's the code:\n```ocaml\nlet x = 1\n```",
-            "Let me explain. First we do this.\n```ocaml\nlet x = 1\n```",
-            "You can use this approach:\n```ocaml\nlet x = 1\n```",
-            "The solution is simple. We just add a function.\n```ocaml\nlet x = 1\n```",
-        ]
-
-        for prose in prose_examples:
-            assert is_degenerate_output(prose, code) is True
-
-    def test_low_keyword_density_detection(self):
-        """Test low keyword density (gibberish) is detected."""
-        # Gibberish with few OCaml keywords
-        gibberish = "```ocaml\nx y z a b c d e f g h i j k l m n o p q r s t u v w\n```"
-        extracted_code = "x y z a b c d e f g h i j k l m n o p q r s t u v w"
-        assert is_degenerate_output(gibberish, extracted_code) is True
-
     def test_code_block_spam_detection(self):
         """Test markdown code block spam is detected."""
         # Multiple code blocks (>2 pairs of ```)
         spam = "```ocaml\n```\n```\n```\n```\n```\nlet x = 1"
-        assert is_degenerate_output(spam, "let x = 1") is True
+        is_deg, reasons = is_degenerate_output(spam, "let x = 1")
+        assert is_deg is True
+        assert "code block spam" in reasons
 
     def test_low_code_purity_detection(self):
         """Test low code purity (too much wrapper text) is detected."""
@@ -297,20 +280,46 @@ class TestDegenerateDetection:
         # Lots of prose around small code block
         wrapper = "Here is a very long explanation about why this code works " * 10
         completion = f"{wrapper}\n```ocaml\n{code}\n```"
-        assert is_degenerate_output(completion, code) is True
+        is_deg, reasons = is_degenerate_output(completion, code)
+        assert is_deg is True
+        assert "low code ratio" in reasons
 
     def test_repetitive_content_detection(self):
         """Test highly repetitive content (spam) is detected."""
         # Highly repetitive pattern
         repetitive = "let x = 1\n" * 50
         completion = f"```ocaml\n{repetitive}\n```"
-        assert is_degenerate_output(completion, repetitive) is True
+        is_deg, reasons = is_degenerate_output(completion, repetitive)
+        assert is_deg is True
+        assert "repetitive content" in reasons
+
+    def test_stub_solution_detection(self):
+        """Test stub solutions with failwith are detected."""
+        stub = 'let rec sort_array (arr : int list) : int list = failwith "Please implement the sort_array function."'
+        is_deg, reasons = is_degenerate_output(stub, stub)
+        assert is_deg is True
+        assert "stub solution" in reasons
+
+        stub2 = '''let sort_array arr =
+  failwith "implement me"'''
+        is_deg, reasons = is_degenerate_output(stub2, stub2)
+        assert is_deg is True
+        assert "stub solution" in reasons
+
+        stub3 = '''let sort_array arr =
+  let x = 1 in
+  failwith "implement later"'''
+        is_deg, reasons = is_degenerate_output(stub3, stub3)
+        assert is_deg is False
+        assert "stub solution" not in reasons
 
     def test_clean_code_passes(self):
         """Test clean, valid code is not marked as degenerate."""
         code = "let rec factorial n = if n <= 1 then 1 else n * factorial (n - 1)"
         completion = f"```ocaml\n{code}\n```"
-        assert is_degenerate_output(completion, code) is False
+        is_deg, reasons = is_degenerate_output(completion, code)
+        assert is_deg is False
+        assert reasons == []
 
         # More complex code with good keyword density
         code = """
@@ -321,15 +330,19 @@ let rec quicksort = function
       quicksort smaller @ [pivot] @ quicksort larger
 """
         completion = f"```ocaml\n{code}\n```"
-        assert is_degenerate_output(completion, code) is False
+        is_deg, reasons = is_degenerate_output(completion, code)
+        assert is_deg is False
+        assert reasons == []
 
     def test_environment_variable_disable(self):
         """Test degenerate detection can be disabled via environment variable."""
         os.environ["GRPO_DISABLE_PROSE_PENALTY"] = "true"
         try:
-            # Even obvious prose should return False
-            prose = "Here's the solution: let x = 1"
-            assert is_degenerate_output(prose, "let x = 1") is False
+            # Even obvious spam should return False when disabled
+            spam = "```ocaml\n```\n```\n```\n```\n```\nlet x = 1"
+            is_deg, reasons = is_degenerate_output(spam, "let x = 1")
+            assert is_deg is False
+            assert reasons == []
         finally:
             del os.environ["GRPO_DISABLE_PROSE_PENALTY"]
 
@@ -670,44 +683,6 @@ class TestRewardInterface:
         # Should not crash, should use empty string for tests
         reward = ocaml_reward(completion, info, state)
         assert isinstance(reward, float)
-
-
-# ============================================================================
-# Dataset and Environment Tests
-# ============================================================================
-
-
-class TestDatasetLoading:
-    """Tests for dataset loading and transformation."""
-
-    @pytest.mark.skip(reason="Requires network access to HuggingFace")
-    def test_load_ocaml_dataset(self):
-        """Test loading OCaml dataset from HuggingFace."""
-        from environment import load_ocaml_dataset
-
-        dataset = load_ocaml_dataset("kiranpg/ocaml-training-problems")
-
-        assert dataset is not None
-        assert len(dataset) > 0
-
-        # Check expected fields
-        example = dataset[0]
-        assert "prompt" in example
-        assert "info" in example
-        assert "tests" in example["info"]
-        assert "problem_id" in example["info"]
-
-    @pytest.mark.skip(reason="Requires network access to HuggingFace")
-    def test_create_ocaml_env(self):
-        """Test creating OCaml environment."""
-        from environment import create_ocaml_env
-
-        env = create_ocaml_env("kiranpg/ocaml-training-problems")
-
-        assert env is not None
-        # Verify it's a verifiers SingleTurnEnv
-        assert hasattr(env, "rubric")
-        assert hasattr(env, "dataset")
 
 
 if __name__ == "__main__":

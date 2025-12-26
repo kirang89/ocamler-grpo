@@ -47,6 +47,8 @@ REWARDS_ZERO: Dict[str, Any] = {
     "error_details": None,
     "prose_penalty_applied": False,
     "is_degenerate": False,
+    "degenerate_reasons": [],
+    "reason": "empty or too short",
     "timeout_stage": None,
     "passed": False,
 }
@@ -224,8 +226,25 @@ def _score_completion_vf(
     base_reward = type_check.score + compile_result.score + test_result.score
 
     # Apply degenerate output penalty
-    is_degenerate = is_degenerate_output(completion, code)
+    is_degenerate, degenerate_reasons = is_degenerate_output(completion, code)
     total_reward = base_reward * 0.3 if is_degenerate else base_reward
+
+    # Build reason for reward < 1
+    reason = None
+    if total_reward < 1.0:
+        if degenerate_reasons:
+            reason = ", ".join(degenerate_reasons)
+        elif test_result.score == 0.0 and compile_succeeded:
+            reason = "test failure"
+        elif compile_result.score < 0.10:
+            if type_check.metadata.get("has_syntax_error"):
+                reason = "syntax error"
+            elif type_check.score < 0.25:
+                reason = "type error"
+            else:
+                reason = "compile failure"
+        elif timeout_stage:
+            reason = f"timeout ({timeout_stage})"
 
     return {
         "problem_id": pid,
@@ -238,6 +257,8 @@ def _score_completion_vf(
         "error_details": type_check.metadata.get("error_details"),
         "prose_penalty_applied": is_degenerate,
         "is_degenerate": is_degenerate,
+        "degenerate_reasons": degenerate_reasons,
+        "reason": reason,
         "timeout_stage": timeout_stage,
         "passed": bool(test_result.score >= 0.65),
     }
@@ -301,6 +322,8 @@ def _build_completion_log_entry(
     }
     if result["timeout_stage"]:
         entry["timeout_stage"] = result["timeout_stage"]
+    if result.get("reason"):
+        entry["reason"] = result["reason"]
     return entry
 
 
