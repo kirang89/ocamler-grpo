@@ -174,6 +174,9 @@ def create_grpo_config(temperature=None) -> GRPOConfig:
     cuda_available = torch.cuda.is_available()
     use_bf16 = cuda_available and torch.cuda.is_bf16_supported()
 
+    print(f"CUDA support available: {cuda_available}")
+    print(f"BF16 support available: {use_bf16}")
+
     # set to 4 prompts/step if VRAM allows; reduce when using larger models.
     per_device_batch = int(os.environ.get("GRPO_BATCH_SIZE", "4"))
     # Leave at 1 with batch 4; raise to 2-4 only when you must drop batch size.
@@ -224,8 +227,7 @@ def create_grpo_config(temperature=None) -> GRPOConfig:
         # Keep it 1 or 2 – frequent logging helps spot reward collapse
         logging_steps=int(os.environ.get("GRPO_LOGGING_STEPS", "1")),
         bf16=use_bf16,  # Auto-detect bf16 support based on CUDA availability
-        # Disable checkpointing to avoid requires_grad issues on RTX 6000 training.
-        gradient_checkpointing=False,
+        gradient_checkpointing=True,
         eval_strategy="no",
         save_steps=100,
         save_total_limit=30,  # Keep last 30 checkpoints (~0.2 epochs of history)
@@ -234,6 +236,12 @@ def create_grpo_config(temperature=None) -> GRPOConfig:
         dataloader_pin_memory=True,
         beta=beta,
         top_entropy_quantile=top_entropy_quantile,  # Focus training on high-entropy tokens
+        lr_scheduler_type="cosine",
+        warmup_ratio=0.03,
+        weight_decay=0.01,
+        optim="adamw_8bit",
+        push_to_hub=True,
+        hub_strategy="end",
     )
 
 
