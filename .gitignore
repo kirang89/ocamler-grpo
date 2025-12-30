@@ -26,3 +26,5 @@ data/
 *.tar
 *.jsonl
 
+# Eval Runs
+eval_runs
