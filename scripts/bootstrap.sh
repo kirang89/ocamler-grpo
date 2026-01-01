@@ -1,105 +1,55 @@
 #!/bin/bash
 set -eo pipefail
 
-# Get the directory where this script lives (repo/scripts)
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_DIR="$(dirname "$SCRIPT_DIR")"
-
-# Colors for logging
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
-
-log_info() {
-    echo -e "${GREEN}[INFO]${NC} $(date '+%Y-%m-%d %H:%M:%S') - $1"
-}
-
-log_warn() {
-    echo -e "${YELLOW}[WARN]${NC} $(date '+%Y-%m-%d %H:%M:%S') - $1"
-}
-
-log_error() {
-    echo -e "${RED}[ERROR]${NC} $(date '+%Y-%m-%d %H:%M:%S') - $1"
-}
-
-log_step() {
-    echo -e "\n${GREEN}========================================${NC}"
-    echo -e "${GREEN}[STEP]${NC} $1"
-    echo -e "${GREEN}========================================${NC}\n"
-}
-
-# Check for root privileges
-if [ "$EUID" -ne 0 ]; then
-    log_error "This script must be run as root"
-    exit 1
-fi
-
-# Step 1: Run package update
-log_step "Running package update"
-apt-get update -y
-log_info "Package update completed"
-
-set -eo pipefail
-
-echo "👤 Running as user: $(whoami)"
-
-# Step 7: Install Nix package manager
+# Step 1: Install Nix package manager
 echo "📦 Installing Nix package manager..."
-
-NIX_INSTALLER_PATH="/tmp/nix-install.sh"
-
-echo "🔗 Resolving Nix installer URL..."
-VERSIONED_URL=$(curl --proto '=https' --tlsv1.2 -sSL -o /dev/null -w '%{url_effective}' https://nixos.org/nix/install)
-CHECKSUM_URL="${VERSIONED_URL}.sha256"
-
-echo "⬇️  Downloading Nix installer from: $VERSIONED_URL"
-curl --proto '=https' --tlsv1.2 -sSL "$VERSIONED_URL" -o "$NIX_INSTALLER_PATH"
-
-echo "⬇️  Downloading official checksum..."
-EXPECTED_CHECKSUM=$(curl --proto '=https' --tlsv1.2 -sSL "$CHECKSUM_URL" | tr -d '[:space:]')
-
-echo "🔐 Verifying checksum..."
-ACTUAL_CHECKSUM=$(sha256sum "$NIX_INSTALLER_PATH" | cut -d' ' -f1)
-if [ "$ACTUAL_CHECKSUM" != "$EXPECTED_CHECKSUM" ]; then
-    echo "❌ Nix installer checksum mismatch!"
-    echo "   Expected: $EXPECTED_CHECKSUM"
-    echo "   Actual:   $ACTUAL_CHECKSUM"
-    rm -f "$NIX_INSTALLER_PATH"
-    exit 1
-fi
-echo "✅ Checksum verified"
-
-sudo sh "$NIX_INSTALLER_PATH" --daemon --yes
-rm -f "$NIX_INSTALLER_PATH"
+sh <(curl --proto '=https' --tlsv1.2 -L https://nixos.org/nix/install)
 echo "✅ Nix installed"
 
-# Source nix profile
-if [ -f /etc/profile.d/nix.sh ]; then
-    . /etc/profile.d/nix.sh
-    echo "✅ Sourced /etc/profile.d/nix.sh"
-elif [ -f ~/.nix-profile/etc/profile.d/nix.sh ]; then
-    . ~/.nix-profile/etc/profile.d/nix.sh
-    echo "✅ Sourced ~/.nix-profile/etc/profile.d/nix.sh"
-else
-    echo "⚠️  Nix profile not found, you may need to restart your shell"
-fi
+# Step 2: Source Nix profile
+echo "🔧 Sourcing Nix profile..."
+. /home/nixer/.nix-profile/etc/profile.d/nix.sh
+# Explicitly add nix to PATH to ensure it's available
+export PATH="/home/nixer/.nix-profile/bin:$PATH"
+echo "✅ Nix profile sourced"
 
-# Step 8: Create /etc/nix/nix.conf with experimental features
+# Step 3: Configure Nix experimental features
 echo "⚙️  Configuring Nix experimental features..."
 sudo mkdir -p /etc/nix
 echo "experimental-features = nix-command flakes" | sudo tee /etc/nix/nix.conf >/dev/null
-echo "✅ Nix flakes enabled"
+echo "✅ Configuration completed"
 
-echo ""
-echo "🎉 Bootstrap completed successfully!"
+# Step 4: Link NVIDIA CUDA libraries
+echo "🔗 Linking NVIDIA CUDA libraries..."
+cd /home/nixer/ocamler-grpo
+mkdir -p .cuda-driver
+cd .cuda-driver
+sudo ln -s /usr/lib/x86_64-linux-gnu/libcuda.so .
+sudo ln -s /usr/lib/x86_64-linux-gnu/libcuda.so.1 .
+export LD_LIBRARY_PATH="/home/nixer/ocamler-grpo/.cuda-driver/:$LD_LIBRARY_PATH"
+cd ..
+echo "✅ CUDA libraries linked"
 
-chmod +x "$NIXER_SCRIPT"
-chown nixer:nixer "$NIXER_SCRIPT"
+# Step 5: Enter nix development shell with CUDA support and run remaining steps
+echo "🔧 Entering nix development environment with CUDA support..."
+nix develop .#cuda --command bash -c '
+set -eo pipefail
 
-log_info "Executing remaining setup as user 'nixer'"
-su - nixer -c "$NIXER_SCRIPT"
-NIXER_EXIT_CODE=$?
-rm -f "$NIXER_SCRIPT"
+# Verify we are inside nix shell
+if [ -z "$IN_NIX_SHELL" ]; then
+    echo "❌ Error: Not inside nix shell"
+    exit 1
+fi
+echo "✅ Inside nix shell"
 
-exit $NIXER_EXIT_CODE
+# Step 6: Install Python dependencies with CUDA support
+echo "📦 Installing Python dependencies with CUDA support..."
+uv sync --extra cuda
+echo "✅ Python dependencies installed"
+
+# Step 7: Verify PyTorch CUDA support
+echo "🔍 Verifying PyTorch CUDA support..."
+uv run python -c "import torch; print(f\"CUDA available: {torch.cuda.is_available()}\"); print(f\"CUDA version: {torch.version.cuda if torch.cuda.is_available() else \"N/A\"}\")"
+echo "✅ PyTorch verification complete"
+'
+echo "✅ Bootstrap complete. Start a new shell with nix develop --impure .#cuda"
