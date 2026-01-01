@@ -12,14 +12,14 @@ dependencies = [
     "pytest>=8.0.0",
     "requests>=2.32.3",
     "ruff>=0.14.5",
+    "torch>=2.6.0",
+    "torchvision>=0.21.0",
     "trl>=0.25.1",
     "verifiers>=0.1.8",
 ]
 
 [project.optional-dependencies]
 cuda = [
-    "torch>=2.6.0",
-    "torchvision>=0.21.0",
     "bitsandbytes>=0.45.0",
 ]
 

@@ -36,6 +36,7 @@
           openssl
           git
           git-lfs
+          jq
           opam
           ocaml
           ocamlPackages.findlib
@@ -96,6 +97,7 @@
             shellHook = ''
               # Use Nix's Python to avoid glibc conflicts
               export UV_PYTHON="${pkgs.python312}/bin/python3.12"
+              export UV_PYTHON_DOWNLOADS=never
 
               ${lib.optionalString enableCuda ''
                 # Build CUDA only for Nvidia A40 (compute capability 8.6).
@@ -124,36 +126,23 @@
               # Customize bash prompt to show nix-shell status with username
               export PS1="\[\033[1;35m\]\u\[\033[0m\]@\[\033[1;34m\][nix-shell:\[\033[1;32m\]ocamler-grpo\[\033[1;34m\]]\[\033[0m\] \[\033[1;36m\]\w\[\033[0m\] \$ "
 
-              ${autoSyncHook}
+              if [ -z "''${UV_AUTO_SYNC_DISABLED:-}" ]; then
+                echo "[nix] Syncing Python dependencies..."
+                uv sync --frozen${lib.optionalString enableCuda " --extra cuda"}
+              else
+                echo "[nix] Skipping automatic uv sync because UV_AUTO_SYNC_DISABLED is set."
+              fi
             '';
           };
-
-        autoSyncHook = ''
-          export UV_PROJECT_ENVIRONMENT="$PWD/.venv"
-          export UV_PYTHON_DOWNLOADS=never
-
-          if [ -z "''${UV_AUTO_SYNC_DISABLED:-}" ]; then
-            if [ ! -f "$PWD/uv.lock" ]; then
-              echo "[nix] Lock file not found. Creating lock file and Python environment via uv sync (first run)..."
-              uv sync
-            elif [ ! -d "$PWD/.venv" ]; then
-              echo "[nix] Creating Python environment via uv sync..."
-              uv sync --frozen
-            else
-              echo "[nix] Refreshing locked Python dependencies via uv sync --frozen..."
-              uv sync --frozen
-            fi
-          else
-            echo "[nix] Skipping automatic uv sync because UV_AUTO_SYNC_DISABLED is set."
-          fi
-        '';
       in {
         devShells.default = mkDevShell {
-          llamaPkg = if pkgs.stdenv.isLinux then llamaCppCuda else llamaCpp;
-          enableCuda = pkgs.stdenv.isLinux;
+          llamaPkg = llamaCpp;
+          enableCuda = false;
         };
 
-        devShells.cuda = mkDevShell { llamaPkg = llamaCppCuda; enableCuda = true; };
-        devShells.cpu = mkDevShell { llamaPkg = llamaCpp; enableCuda = false; };
+        devShells.cuda = mkDevShell {
+          llamaPkg = llamaCppCuda;
+          enableCuda = true;
+        };
       });
 }
