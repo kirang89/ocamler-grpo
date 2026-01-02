@@ -14,6 +14,9 @@
             --chart-title-color: #fff;
             --grid-color: #333;
             --tick-color: #888;
+            --accent-cyan: #22d3d1;
+            --accent-pink: #f472b6;
+            --accent-purple: #a78bfa;
         }
 
         [data-theme="light"] {
@@ -105,10 +108,14 @@
         }
         .chart-card {
             background: var(--card-bg);
-            border-radius: 12px;
-            padding: 20px;
+            border-radius: 16px;
+            padding: 24px;
             box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-            transition: background-color 0.3s;
+            transition: all 0.3s ease;
+        }
+        .chart-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 16px rgba(0, 0, 0, 0.15);
         }
         .chart-title {
             font-size: 1rem;
@@ -119,6 +126,55 @@
         canvas {
             width: 100% !important;
             height: 250px !important;
+        }
+        .metric-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            max-width: 1800px;
+            margin: 0 auto 40px auto;
+        }
+        .metric-card {
+            background: var(--card-bg);
+            border-radius: 16px;
+            padding: 24px;
+            border: 1px solid var(--grid-color);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            text-align: center;
+        }
+        .metric-label {
+            font-size: 0.9rem;
+            color: var(--subtitle-color);
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .metric-value {
+            font-size: 3.5rem;
+            font-weight: 700;
+            margin: 12px 0;
+            color: var(--accent-cyan);
+            line-height: 1;
+        }
+        .metric-trend {
+            font-size: 0.85rem;
+            color: var(--subtitle-color);
+            margin-top: 8px;
+        }
+        .metric-sublabel {
+            font-size: 0.85rem;
+            color: var(--subtitle-color);
+            margin-top: 8px;
+        }
+        .metric-progress-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin-top: 12px;
+        }
+        .metric-progress-container canvas {
+            width: 120px !important;
+            height: 120px !important;
         }
         .error {
             color: #ef4444;
@@ -145,7 +201,7 @@
         .params-table {
             width: 100%;
             border-collapse: collapse;
-            font-family: monospace;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             font-size: 0.9rem;
         }
         .params-table td {
@@ -182,7 +238,6 @@
     <header>
         <div class="header-content">
             <h1>GRPO Training Dashboard</h1>
-            <p class="subtitle">Epoch: <span id="epochNumber">Loading...</span></p>
             <p class="subtitle">Last updated: <span id="timestamp">Loading...</span></p>
         </div>
         <div class="header-nav">
@@ -190,6 +245,27 @@
         </div>
         <button id="themeToggle" class="theme-toggle">Switch Theme</button>
     </header>
+
+    <div class="metric-cards">
+        <div class="metric-card">
+            <div class="metric-label">Current Epoch</div>
+            <div class="metric-value" id="metricEpoch">0.00</div>
+            <div class="metric-trend">Training in progress</div>
+        </div>
+
+        <div class="metric-card">
+            <div class="metric-label">Latest Reward</div>
+            <div class="metric-value" id="metricReward">0.000</div>
+            <div class="metric-sublabel">Mean reward value</div>
+        </div>
+
+        <div class="metric-card">
+            <div class="metric-label">Zero Std Fraction</div>
+            <div class="metric-progress-container">
+                <canvas id="fracZeroProgress" width="120" height="120"></canvas>
+            </div>
+        </div>
+    </div>
 
     <div class="grid">
         <div class="chart-card">
@@ -225,7 +301,7 @@
             <canvas id="rewardChart"></canvas>
         </div>
         <div class="chart-card">
-            <div class="chart-title">Error Breakdown (cumulative %)</div>
+            <div class="chart-title">Cumulative Error Breakdown (%)</div>
             <canvas id="errorChart"></canvas>
         </div>
         <div class="chart-card">
@@ -237,6 +313,17 @@
     <div id="trainingParams" class="params-container" style="display: none;">Loading parameters...</div>
 
     <script>
+        // Color Palette
+        const colorPalette = {
+            cyan: '#22d3d1',
+            pink: '#f472b6',
+            purple: '#a78bfa',
+            green: '#4ade80',
+            blue: '#60a5fa',
+            yellow: '#fbbf24',
+            orange: '#fb923c'
+        };
+
         // State
         let charts = {};
         let currentData = null;
@@ -275,11 +362,33 @@
             };
         }
 
+        function createGradient(ctx, chartArea, color) {
+            if (!chartArea) {
+                return color + '33'; // Fallback to semi-transparent color
+            }
+
+            const gradient = ctx.createLinearGradient(0, chartArea.top, 0, chartArea.bottom);
+            gradient.addColorStop(0, color + 'cc'); // 80% opacity at top
+            gradient.addColorStop(0.5, color + '66'); // 40% opacity at middle
+            gradient.addColorStop(1, color + '11'); // ~7% opacity at bottom
+
+            return gradient;
+        }
+
         function getCommonConfig(colors) {
             return {
                 responsive: true,
                 maintainAspectRatio: false,
-                plugins: { legend: { display: false } },
+                plugins: {
+                    legend: {
+                        display: false,
+                        labels: {
+                            font: {
+                                family: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+                            }
+                        }
+                    }
+                },
                 scales: {
                     x: {
                         title: { display: true, text: 'Epoch', color: colors.tick },
@@ -299,6 +408,67 @@
                 charts[id].destroy();
                 delete charts[id];
             }
+        }
+
+        function renderMetricCards(data) {
+            // Update epoch
+            const epochEl = document.getElementById('metricEpoch');
+            if (data.latest_epoch !== null && data.latest_epoch !== undefined) {
+                epochEl.textContent = parseFloat(data.latest_epoch).toFixed(2);
+            } else {
+                epochEl.textContent = 'N/A';
+            }
+
+            // Update reward
+            const rewardEl = document.getElementById('metricReward');
+            if (data.reward_mean && data.reward_mean.length > 0) {
+                const latestReward = data.reward_mean[data.reward_mean.length - 1];
+                rewardEl.textContent = latestReward.toFixed(3);
+            } else {
+                rewardEl.textContent = 'N/A';
+            }
+        }
+
+        function renderFracZeroProgress(canvasId, latestValue) {
+            destroyChart(canvasId);
+            const canvas = document.getElementById(canvasId);
+            if (!canvas) return;
+
+            const ctx = canvas.getContext('2d');
+            const percentage = (latestValue * 100).toFixed(1);
+
+            charts[canvasId] = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    datasets: [{
+                        data: [latestValue * 100, 100 - (latestValue * 100)],
+                        backgroundColor: [colorPalette.cyan, 'rgba(255, 255, 255, 0.1)'],
+                        borderWidth: 0,
+                        cutout: '75%'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: true,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: { enabled: false }
+                    }
+                },
+                plugins: [{
+                    id: 'centerText',
+                    afterDraw: (chart) => {
+                        const {ctx, chartArea: {width, height}} = chart;
+                        ctx.save();
+                        ctx.font = 'bold 24px sans-serif';
+                        ctx.fillStyle = getChartColors().text;
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'middle';
+                        ctx.fillText(`${percentage}%`, width / 2, height / 2);
+                        ctx.restore();
+                    }
+                }]
+            });
         }
 
         function renderParams(params) {
@@ -341,10 +511,10 @@
                         label: label,
                         data: data.values,
                         borderColor: color,
-                        backgroundColor: color + '33', // 20% opacity
-                        borderWidth: 2,
+                        fill: false,
+                        borderWidth: 3,
                         pointRadius: 0,
-                        tension: 0.1
+                        tension: 0.4
                     }]
                 },
                 options: config
@@ -356,7 +526,15 @@
             const ctx = document.getElementById(canvasId).getContext('2d');
             const colors = getChartColors();
             const config = getCommonConfig(colors);
-            config.plugins.legend = { display: true, labels: { color: colors.text } };
+            config.plugins.legend = {
+                display: true,
+                labels: {
+                    color: colors.text,
+                    font: {
+                        family: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+                    }
+                }
+            };
 
             // Create upper and lower bounds for the standard deviation area
             const rewardUpper = data.reward_mean.map((v, i) => v + data.reward_std[i]);
@@ -370,21 +548,21 @@
                         {
                             label: 'Reward',
                             data: data.reward_mean,
-                            borderColor: '#4ade80',
-                            backgroundColor: '#4ade80',
-                            borderWidth: 2,
+                            borderColor: colorPalette.green,
+                            backgroundColor: colorPalette.green,
+                            borderWidth: 3,
                             pointRadius: 0,
-                            tension: 0.1,
+                            tension: 0.4,
                             zIndex: 10
                         },
                         {
                             label: 'Reward Std Dev',
                             data: rewardUpper,
                             borderColor: 'transparent',
-                            backgroundColor: '#4ade8033', // Translucent Green
+                            backgroundColor: 'rgba(74, 222, 128, 0.2)',
                             pointRadius: 0,
-                            fill: '+1', // Fill to the next dataset (which is lower bound)
-                            tension: 0.1
+                            fill: '+1',
+                            tension: 0.4
                         },
                         {
                             label: 'Reward Std Dev Lower',
@@ -393,15 +571,15 @@
                             backgroundColor: 'transparent',
                             pointRadius: 0,
                             fill: false,
-                            tension: 0.1
+                            tension: 0.4
                         },
                         {
                             label: 'Syntax Reward',
                             data: data.syntax_reward_mean,
-                            borderColor: '#60a5fa',
-                            borderWidth: 2,
+                            borderColor: colorPalette.blue,
+                            borderWidth: 3,
                             pointRadius: 0,
-                            tension: 0.1
+                            tension: 0.4
                         }
                     ]
                 },
@@ -418,7 +596,19 @@
             const ctx = document.getElementById(canvasId).getContext('2d');
             const colors = getChartColors();
             const config = getCommonConfig(colors);
-            config.plugins.legend = { display: true, labels: { color: colors.text } };
+            config.plugins.legend = {
+                display: true,
+                position: 'top',
+                align: 'center',
+                labels: {
+                    color: colors.text,
+                    font: {
+                        family: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+                    },
+                    boxWidth: 12,
+                    padding: 10
+                }
+            };
             config.scales.y.title = {
                 display: true,
                 text: 'Cumulative error rate (%)',
@@ -426,6 +616,7 @@
             };
             config.scales.y.suggestedMin = 0;
             config.scales.y.suggestedMax = 100;
+            config.scales.y.stacked = true;
             config.scales.x.title = { display: true, text: 'Completion #', color: colors.tick };
 
             charts[canvasId] = new Chart(ctx, {
@@ -436,38 +627,42 @@
                         {
                             label: 'Syntax errors',
                             data: data.syntax_error_rate,
-                            borderColor: '#f472b6',
-                            backgroundColor: '#f472b633',
+                            borderColor: colorPalette.pink,
+                            backgroundColor: 'rgba(244, 114, 182, 0.3)',
+                            fill: true,
                             borderWidth: 2,
                             pointRadius: 0,
-                            tension: 0.1
+                            tension: 0.3
                         },
                         {
                             label: 'Type errors',
                             data: data.type_error_rate,
-                            borderColor: '#60a5fa',
-                            backgroundColor: '#60a5fa33',
+                            borderColor: colorPalette.blue,
+                            backgroundColor: 'rgba(96, 165, 250, 0.3)',
+                            fill: true,
                             borderWidth: 2,
                             pointRadius: 0,
-                            tension: 0.1
+                            tension: 0.3
                         },
                         {
                             label: 'Compile errors',
                             data: data.compile_error_rate,
-                            borderColor: '#fbbf24',
-                            backgroundColor: '#fbbf2433',
+                            borderColor: colorPalette.yellow,
+                            backgroundColor: 'rgba(251, 191, 36, 0.3)',
+                            fill: true,
                             borderWidth: 2,
                             pointRadius: 0,
-                            tension: 0.1
+                            tension: 0.3
                         },
                         {
                             label: 'Execution failures',
                             data: data.execution_failure_rate,
-                            borderColor: '#fb923c',
-                            backgroundColor: '#fb923c33',
+                            borderColor: colorPalette.orange,
+                            backgroundColor: 'rgba(251, 146, 60, 0.3)',
+                            fill: true,
                             borderWidth: 2,
                             pointRadius: 0,
-                            tension: 0.1
+                            tension: 0.3
                         }
                     ]
                 },
@@ -476,16 +671,25 @@
         }
 
         function renderCharts(data) {
-            renderChart('lossChart', { epochs: data.epochs, values: data.loss }, 'Loss', '#f472b6');
-            renderChart('gradChart', { epochs: data.epochs, values: data.grad }, 'Grad', '#fb923c');
-            renderChart('lrChart', { epochs: data.epochs, values: data.lr }, 'LR', '#a78bfa', { logScale: true });
-            renderChart('entropyChart', { epochs: data.epochs, values: data.entropy }, 'Entropy', '#22d3d1');
-            renderChart('klChart', { epochs: data.epochs, values: data.kl }, 'KL Divergence', '#ec4899');
-            renderChart('stepTimeChart', { epochs: data.epochs, values: data.step_time }, 'Step Time', '#8b5cf6');
-            renderChart('meanLengthChart', { epochs: data.epochs, values: data.mean_length }, 'Mean Length', '#10b981');
+            renderChart('lossChart', { epochs: data.epochs, values: data.loss }, 'Loss', colorPalette.pink);
+            renderChart('gradChart', { epochs: data.epochs, values: data.grad }, 'Grad', colorPalette.orange);
+            renderChart('lrChart', { epochs: data.epochs, values: data.lr }, 'LR', colorPalette.purple, { logScale: true });
+            renderChart('entropyChart', { epochs: data.epochs, values: data.entropy }, 'Entropy', colorPalette.cyan);
+            renderChart('klChart', { epochs: data.epochs, values: data.kl }, 'KL Divergence', colorPalette.pink);
+            renderChart('stepTimeChart', { epochs: data.epochs, values: data.step_time }, 'Step Time', colorPalette.purple);
+            renderChart('meanLengthChart', { epochs: data.epochs, values: data.mean_length }, 'Mean Length', colorPalette.green);
             renderRewardChart('rewardChart', data);
-            renderChart('fracZeroChart', { epochs: data.epochs, values: data.frac_zero_std }, 'Frac Zero Std', '#fbbf24');
+            renderChart('fracZeroChart', { epochs: data.epochs, values: data.frac_zero_std }, 'Frac Zero Std', colorPalette.cyan);
             renderErrorChart('errorChart', data.error_metrics);
+
+            // Render metric cards
+            renderMetricCards(data);
+
+            // Render circular progress for Fraction Zero Std
+            if (data.frac_zero_std && data.frac_zero_std.length > 0) {
+                const latestFracZero = data.frac_zero_std[data.frac_zero_std.length - 1];
+                renderFracZeroProgress('fracZeroProgress', latestFracZero);
+            }
         }
 
         async function loadData() {
@@ -497,11 +701,6 @@
 
                 currentData = data;
                 document.getElementById('timestamp').textContent = new Date().toLocaleString();
-                if (data.latest_epoch !== null && data.latest_epoch !== undefined) {
-                    document.getElementById('epochNumber').textContent = parseFloat(data.latest_epoch).toFixed(2);
-                } else {
-                    document.getElementById('epochNumber').textContent = 'N/A';
-                }
                 
                 if (data.training_params) {
                     renderParams(data.training_params);
