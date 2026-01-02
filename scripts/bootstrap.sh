@@ -19,16 +19,17 @@ sudo mkdir -p /etc/nix
 echo "experimental-features = nix-command flakes" | sudo tee /etc/nix/nix.conf >/dev/null
 echo "✅ Configuration completed"
 
-# Step 4: Link NVIDIA CUDA libraries
-echo "🔗 Linking NVIDIA CUDA libraries..."
+# Step 4: Link NVIDIA CUDA and NVML libraries
+echo "🔗 Linking NVIDIA CUDA and NVML libraries..."
 cd /home/nixer/ocamler-grpo
 mkdir -p .cuda-driver
 cd .cuda-driver
-sudo ln -s /usr/lib/x86_64-linux-gnu/libcuda.so .
-sudo ln -s /usr/lib/x86_64-linux-gnu/libcuda.so.1 .
+sudo ln -sf /usr/lib/x86_64-linux-gnu/libcuda.so .
+sudo ln -sf /usr/lib/x86_64-linux-gnu/libcuda.so.1 .
+sudo ln -sf /usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1 .
 export LD_LIBRARY_PATH="/home/nixer/ocamler-grpo/.cuda-driver/:$LD_LIBRARY_PATH"
 cd ..
-echo "✅ CUDA libraries linked"
+echo "✅ CUDA and NVML libraries linked"
 
 # Step 5: Enter nix development shell with CUDA support and run remaining steps
 echo "🔧 Entering nix development environment with CUDA support..."

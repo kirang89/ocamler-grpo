@@ -66,6 +66,9 @@ def log_learning_metrics(log_path: Path, metrics: Dict) -> None:
         "rewards/syntax_aware_reward/std",
         "entropy",
         "frac_reward_zero_std",
+        "step_time",
+        "completions/mean_length",
+        "kl",
     ]
 
     # Extract available metrics
@@ -115,5 +118,15 @@ def log_learning_metrics(log_path: Path, metrics: Dict) -> None:
             f.write(f"  entropy={filtered_metrics['entropy']:.3f}")
         if "frac_reward_zero_std" in filtered_metrics:
             f.write(f"  frac_zero_std={filtered_metrics['frac_reward_zero_std']:.2f}")
+
+        # Step timing metrics
+        if "step_time" in filtered_metrics:
+            f.write(f"  step_time={filtered_metrics['step_time']:.3f}s")
+
+        # Completion metrics
+        if "completions/mean_length" in filtered_metrics:
+            f.write(f"  mean_len={filtered_metrics['completions/mean_length']:.1f}")
+        if "kl" in filtered_metrics:
+            f.write(f"  kl={filtered_metrics['kl']:.4f}")
 
         f.write("\n")

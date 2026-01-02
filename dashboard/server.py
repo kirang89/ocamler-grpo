@@ -136,6 +136,9 @@ def parse_log_file(log_path):
         r"syntax_rew=([^±]+)±([^\s]+)\s+"
         r"entropy=([^\s]+)\s+"
         r"frac_zero_std=([^\s]+)"
+        r"(?:\s+step_time=([^\s]+)s)?"  # Optional step_time (group 11)
+        r"(?:\s+mean_len=([^\s]+))?"    # Optional mean_length (group 12)
+        r"(?:\s+kl=([^\s]+))?"          # Optional kl (group 13)
     )
 
     # Collect all values per epoch
@@ -150,6 +153,9 @@ def parse_log_file(log_path):
             "syntax_reward_mean": [],
             "syntax_reward_std": [],
             "frac_zero_std": [],
+            "step_time": [],
+            "mean_length": [],
+            "kl": [],
         }
     )
 
@@ -168,6 +174,18 @@ def parse_log_file(log_path):
                     epoch_data[epoch]["syntax_reward_std"].append(float(match.group(8)))
                     epoch_data[epoch]["entropy"].append(float(match.group(9)))
                     epoch_data[epoch]["frac_zero_std"].append(float(match.group(10)))
+                    # Extract step_time if present (group 11)
+                    step_time_str = match.group(11)
+                    if step_time_str:
+                        epoch_data[epoch]["step_time"].append(float(step_time_str))
+                    # Extract mean_length if present (group 12)
+                    mean_len_str = match.group(12)
+                    if mean_len_str:
+                        epoch_data[epoch]["mean_length"].append(float(mean_len_str))
+                    # Extract kl if present (group 13)
+                    kl_str = match.group(13)
+                    if kl_str:
+                        epoch_data[epoch]["kl"].append(float(kl_str))
     except FileNotFoundError:
         print(f"Warning: Log file {log_path} not found.")
         return {"epochs": [], "error": "Log file not found"}
@@ -190,6 +208,9 @@ def parse_log_file(log_path):
         "syntax_reward_mean": [mean(epoch_data[e]["syntax_reward_mean"]) for e in sorted_epochs],
         "syntax_reward_std": [mean(epoch_data[e]["syntax_reward_std"]) for e in sorted_epochs],
         "frac_zero_std": [mean(epoch_data[e]["frac_zero_std"]) for e in sorted_epochs],
+        "step_time": [mean(epoch_data[e]["step_time"]) for e in sorted_epochs],
+        "mean_length": [mean(epoch_data[e]["mean_length"]) for e in sorted_epochs],
+        "kl": [mean(epoch_data[e]["kl"]) for e in sorted_epochs],
     }
 
     return result

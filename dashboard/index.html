@@ -209,6 +209,18 @@
             <canvas id="entropyChart"></canvas>
         </div>
         <div class="chart-card">
+            <div class="chart-title">KL Divergence</div>
+            <canvas id="klChart"></canvas>
+        </div>
+        <div class="chart-card">
+            <div class="chart-title">Step Time (seconds)</div>
+            <canvas id="stepTimeChart"></canvas>
+        </div>
+        <div class="chart-card">
+            <div class="chart-title">Mean Completion Length (tokens)</div>
+            <canvas id="meanLengthChart"></canvas>
+        </div>
+        <div class="chart-card">
             <div class="chart-title">Reward (mean ± std)</div>
             <canvas id="rewardChart"></canvas>
         </div>
@@ -468,6 +480,9 @@
             renderChart('gradChart', { epochs: data.epochs, values: data.grad }, 'Grad', '#fb923c');
             renderChart('lrChart', { epochs: data.epochs, values: data.lr }, 'LR', '#a78bfa', { logScale: true });
             renderChart('entropyChart', { epochs: data.epochs, values: data.entropy }, 'Entropy', '#22d3d1');
+            renderChart('klChart', { epochs: data.epochs, values: data.kl }, 'KL Divergence', '#ec4899');
+            renderChart('stepTimeChart', { epochs: data.epochs, values: data.step_time }, 'Step Time', '#8b5cf6');
+            renderChart('meanLengthChart', { epochs: data.epochs, values: data.mean_length }, 'Mean Length', '#10b981');
             renderRewardChart('rewardChart', data);
             renderChart('fracZeroChart', { epochs: data.epochs, values: data.frac_zero_std }, 'Frac Zero Std', '#fbbf24');
             renderErrorChart('errorChart', data.error_metrics);
