@@ -300,7 +300,9 @@ def main():
     if last_checkpoint:
         print(f"Resuming training from checkpoint: {last_checkpoint}")
         # Load LoRA config from checkpoint to ensure compatibility
+        # TODO: Consider creating a new lora config using checkpoint data
         lora_config = PeftConfig.from_pretrained(last_checkpoint)
+        lora_config.inference_mode = False
         print(
             f"Loaded LoRA config from checkpoint (r={lora_config.r}, alpha={lora_config.lora_alpha})"
         )
