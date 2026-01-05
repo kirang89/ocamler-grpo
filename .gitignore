@@ -28,3 +28,6 @@ data/
 
 # Eval Runs
 eval_runs
+
+# SFT Runs
+sft_runs

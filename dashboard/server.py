@@ -19,6 +19,10 @@ DEFAULT_ERROR_LOG = os.path.join(
 DEFAULT_COMPLETIONS_FILE = os.path.join(
     os.path.dirname(SCRIPT_DIR), "grpo_runs", "reward_logs", "completions.jsonl"
 )
+# SFT metrics paths
+DEFAULT_SFT_METRICS_FILE = os.path.join(os.path.dirname(SCRIPT_DIR), "sft_runs/metrics.jsonl")
+SFT_METRICS_FILE = DEFAULT_SFT_METRICS_FILE
+
 PORT = 8080
 # Optional batch metrics file (derived from LOG_FILE if not provided)
 BATCH_METRICS_FILE = None
@@ -400,6 +404,123 @@ def parse_completions_jsonl(jsonl_path: str):
     return entries
 
 
+# =============================================================================
+# SFT Metrics Parsing
+# =============================================================================
+
+
+def get_sft_training_params():
+    """Extract SFT training parameters from .envrc file."""
+    params = {}
+    envrc_path = os.path.join(os.path.dirname(SCRIPT_DIR), ".envrc")
+
+    try:
+        with open(envrc_path, "r") as f:
+            for line in f:
+                m = re.match(r"export\s+([A-Z_]+)=(.*)", line.strip())
+                if m:
+                    key, val = m.groups()
+                    val = val.split("#")[0].strip().strip("\"'")
+                    if key.startswith("SFT_") or key.startswith("LORA_") or key == "BASE_MODEL_ID":
+                        # Convert key to display format
+                        display_key = key.replace("SFT_", "").replace("_", " ").title()
+                        if key == "BASE_MODEL_ID":
+                            display_key = "Model"
+                        elif key.startswith("LORA_"):
+                            display_key = key.replace("_", " ").title()
+                        params[display_key] = val
+    except FileNotFoundError:
+        pass
+
+    return params
+
+
+def parse_sft_metrics(metrics_path: str):
+    """
+    Parse SFT metrics.jsonl file and return structured data for visualization.
+
+    The JSONL file contains:
+    - train_start event with config
+    - Per-step metrics: step, epoch, loss, learning_rate, grad_norm
+    - train_end event with summary
+
+    Returns dict with arrays for plotting.
+    """
+    result = {
+        "steps": [],
+        "epochs": [],
+        "loss": [],
+        "learning_rate": [],
+        "grad_norm": [],
+        "timestamps": [],
+        "train_config": None,
+        "train_summary": None,
+        "latest_step": None,
+        "latest_epoch": None,
+        "latest_loss": None,
+        "total_entries": 0,
+    }
+
+    if not os.path.exists(metrics_path):
+        result["error"] = f"SFT metrics file not found: {metrics_path}"
+        return result
+
+    try:
+        with open(metrics_path, "r") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                # Handle events
+                event = entry.get("event")
+                if event == "train_start":
+                    result["train_config"] = {
+                        "total_steps": entry.get("total_steps"),
+                        "num_epochs": entry.get("num_epochs"),
+                        "batch_size": entry.get("batch_size"),
+                        "grad_accum_steps": entry.get("grad_accum_steps"),
+                        "learning_rate": entry.get("learning_rate"),
+                    }
+                    continue
+                elif event == "train_end":
+                    result["train_summary"] = {
+                        "total_steps": entry.get("total_steps"),
+                        "elapsed_seconds": entry.get("elapsed_seconds"),
+                        "samples_per_second": entry.get("samples_per_second"),
+                    }
+                    continue
+
+                # Handle metrics entries
+                step = entry.get("step")
+                if step is None:
+                    continue
+
+                result["steps"].append(step)
+                result["epochs"].append(entry.get("epoch", 0))
+                result["loss"].append(entry.get("loss"))
+                result["learning_rate"].append(entry.get("learning_rate"))
+                result["grad_norm"].append(entry.get("grad_norm"))
+                result["timestamps"].append(entry.get("timestamp"))
+                result["total_entries"] += 1
+
+    except OSError as exc:
+        result["error"] = f"Error reading SFT metrics: {exc}"
+        return result
+
+    # Set latest values
+    if result["steps"]:
+        result["latest_step"] = result["steps"][-1]
+        result["latest_epoch"] = result["epochs"][-1]
+        result["latest_loss"] = result["loss"][-1]
+
+    return result
+
+
 class DashboardHandler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=DASHBOARD_DIR, **kwargs)
@@ -422,6 +543,14 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             data = parse_completions_jsonl(COMPLETIONS_FILE)
+            self.wfile.write(json.dumps(data).encode())
+        elif parsed.path == "/api/sft/data":
+            self.send_response(200)
+            self.send_header("Content-type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            data = parse_sft_metrics(SFT_METRICS_FILE)
+            data["training_params"] = get_sft_training_params()
             self.wfile.write(json.dumps(data).encode())
         else:
             super().do_GET()
@@ -449,6 +578,12 @@ if __name__ == "__main__":
         default=DEFAULT_COMPLETIONS_FILE,
         help="Path to completions.jsonl (defaults to latest-run/completions.jsonl)",
     )
+    parser.add_argument(
+        "--sft-metrics",
+        type=str,
+        default=DEFAULT_SFT_METRICS_FILE,
+        help="Path to SFT metrics.jsonl (defaults to sft_runs/metrics.jsonl)",
+    )
     args = parser.parse_args()
 
     LOG_FILE = args.log
@@ -459,12 +594,14 @@ if __name__ == "__main__":
         BATCH_METRICS_FILE = os.path.join(log_dir, "reward_logs", "batch_metrics.jsonl")
     ERROR_LOG_FILE = args.error_log
     COMPLETIONS_FILE = args.completions
+    SFT_METRICS_FILE = args.sft_metrics
 
     print("Starting dashboard server...")
     print(f"  Log file: {LOG_FILE}")
     print(f"  Batch metrics: {BATCH_METRICS_FILE}")
     print(f"  Error log: {resolve_error_log_path(ERROR_LOG_FILE) or ERROR_LOG_FILE}")
     print(f"  Completions: {COMPLETIONS_FILE}")
+    print(f"  SFT metrics: {SFT_METRICS_FILE}")
     print(f"  Dashboard: http://localhost:{args.port}")
 
     # Create dashboard directory if it doesn't exist, just in case

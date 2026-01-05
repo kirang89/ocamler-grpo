@@ -43,7 +43,7 @@ The Nix environment includes llama.cpp pre-installed. Start a model server:
 llama-server -hf unsloth/Qwen2.5-Coder-1.5B-Instruct-GGUF:F16 -c 4096 -ngl -1
 ```
 
-## Training
+## RLVR Training
 
 Fine-tune the base model (default: Qwen2.5-Coder) using GRPO:
 
@@ -53,7 +53,35 @@ Fine-tune the base model (default: Qwen2.5-Coder) using GRPO:
 
 This starts the model training using the [default training dataset](https://huggingface.co/datasets/kiranpg/ocaml-training-problems) in the background and logs to `training.log`.
 
-## Post-Training
+### Reward System Architecture
+
+The training uses a graduated reward system that provides learning signals at multiple compilation stages:
+
+| Stage | Weight | Description |
+|-------|--------|-------------|
+| Type Check | 25% | Graduated partial credit based on error count (0 errors = 100%, 1 error = 80%, etc.) |
+| Compilation | 10% | Partial credit for successful compilation |
+| Tests | 65% | Full credit only when all tests pass |
+
+**Prose Penalty:** Completions detected as degenerate (conversational prose, low keyword density, spam) receive a 0.3x multiplier on their base reward.
+
+The reward system uses the [verifiers](https://github.com/primeintellect-ai/verifiers) library for environment abstraction while maintaining compatibility with trl's GRPOTrainer.
+
+### Metrics
+
+There are three key logs to understand the training:
+1. `training.log` -> Logs the training. Good for checking progress. Verbose.
+2. `learning.log` -> Logs the specific learning metrics of interest. For more information about them, refer [the doc](doc/metrics.md).
+3. `completions.jsonl` -> Structured log of model completions:
+   ```json
+   {"problem_id": "", "reward": 0.0, "base_reward": 0.0, "length": 895, "prose_penalty_applied": false, "completion": ""}
+   ```
+4. `syntax_aware_breakdown.jsonl` -> Detailed reward breakdown per completion:
+   ```json
+   {"problem_id": "", "total_reward": 0.0, "type_check": 0.25, "compile": 0.10, "tests": 0.65, "prose_penalty_applied": false}
+   ```
+
+## Post-RLVR-Training
 
 ### Merging the Adapter
 
@@ -84,7 +112,7 @@ To convert the merged model to GGUF format for use with llama.cpp:
    llama.cpp/llama-quantize model.gguf model-q4_k_m.gguf Q4_K_M
    ```
 
-## Evaluate Model Performance
+### Evaluating Model Performance
 
 Assess model performance against test cases:
 
@@ -92,37 +120,44 @@ Assess model performance against test cases:
 uv run python evaluate.py
 ```
 
-## Configuration
 
-All parameters using for training in `train.py` can be configured by environment variables that should be added to `.envrc`.
 
-## Reward System Architecture
+## Supervised Fine-Tuning
 
-The training uses a graduated reward system that provides learning signals at multiple compilation stages:
+Pre-train the base model on OCaml code examples before RLVR:
 
-| Stage | Weight | Description |
-|-------|--------|-------------|
-| Type Check | 25% | Graduated partial credit based on error count (0 errors = 100%, 1 error = 80%, etc.) |
-| Compilation | 10% | Partial credit for successful compilation |
-| Tests | 65% | Full credit only when all tests pass |
+```bash
+./scripts/run-sft.sh
+```
 
-**Prose Penalty:** Completions detected as degenerate (conversational prose, low keyword density, spam) receive a 0.3x multiplier on their base reward.
+This uses TRL's SFTTrainer with LoRA to fine-tune on the [SFT dataset](https://huggingface.co/datasets/kiranpg/ocaml-sft-problems).
 
-The reward system uses the [verifiers](https://github.com/primeintellect-ai/verifiers) library for environment abstraction while maintaining compatibility with trl's GRPOTrainer.
+### Training Strategy
 
-## Metrics
+SFT uses **completion-only training** via TRL's native prompt-completion dataset format:
 
-There are three key logs to understand the training:
-1. `training.log` -> Logs the training. Good for checking progress. Verbose.
-2. `learning.log` -> Logs the specific learning metrics of interest. For more information about them, refer [the doc](doc/metrics.md).
-3. `completions.jsonl` -> Structured log of model completions:
-   ```json
-   {"problem_id": "", "reward": 0.0, "base_reward": 0.0, "length": 895, "prose_penalty_applied": false, "completion": ""}
-   ```
-4. `syntax_aware_breakdown.jsonl` -> Detailed reward breakdown per completion:
-   ```json
-   {"problem_id": "", "total_reward": 0.0, "type_check": 0.25, "compile": 0.10, "tests": 0.65, "prose_penalty_applied": false}
-   ```
+- **Prompt**: Problem description + function signature (masked from loss)
+- **Completion**: Code in markdown blocks ` ```ocaml...``` ` (trained on)
+
+When SFTTrainer receives a dataset with `prompt` and `completion` columns, it automatically masks prompt tokens from the loss (`completion_only_loss=True` by default). The model learns to generate OCaml code blocks without wasting capacity learning to predict prompt tokens.
+
+### Configuration
+
+Key environment variables (set in `.envrc` or export manually):
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `BASE_MODEL_ID` | (required) | Base model to fine-tune |
+| `SFT_DATASET` | `kiranpg/ocaml-sft-problems` | HuggingFace dataset |
+| `SFT_NUM_EPOCHS` | `3` | Training epochs |
+| `SFT_BATCH_SIZE` | `4` | Per-device batch size |
+| `SFT_LEARNING_RATE` | `2e-5` | Learning rate |
+| `LORA_R` | `32` | LoRA rank |
+
+Quick sanity check:
+```bash
+SFT_NUM_EPOCHS=0.001 ./scripts/run-sft.sh
+```
 
 ## Project Structure
 
@@ -134,11 +169,17 @@ ocamler-grpo/
 ├── reward.py          # Original reward implementation (kept for reference)
 ├── logger.py          # Logging infrastructure for training metrics
 ├── evaluate.py        # Model evaluation script
+├── sft/               # Supervised fine-tuning module
+│   ├── train.py       # SFT training with TRL's SFTTrainer
+│   ├── config.py      # LoRA configuration
+│   ├── data.py        # Dataset loading from HuggingFace
+│   └── logging.py     # Metrics logging
 ├── dashboard/         # Real-time training dashboard
 │   ├── server.py      # Dashboard backend
 │   └── index.html     # Dashboard frontend
 ├── tests/             # Unit tests
 │   └── test_ocaml_env.py
 └── scripts/
+    ├── run-sft.sh     # SFT training launcher
     └── verify_migration.py  # Compares old vs new reward implementations
 ```
