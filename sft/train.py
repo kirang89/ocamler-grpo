@@ -52,6 +52,8 @@ DEFAULT_OPTIMIZER = "adamw_8bit"
 DEFAULT_DATALOADER_NUM_WORKERS = 2
 DEFAULT_SFT_DATASET = "kiranpg/ocaml-sft-problems"
 DEFAULT_SFT_OUTPUT_DIR = "sft_runs"
+DEFAULT_EVAL_SPLIT = 0.1
+DEFAULT_EVAL_STEPS = 20
 
 
 # =============================================================================
@@ -115,10 +117,11 @@ def get_optimizer() -> str:
     return requested
 
 
-def load_sft_config_from_env(use_bf16: bool, use_fp16: bool) -> SFTConfig:
+def load_sft_config_from_env(use_bf16: bool, use_fp16: bool, has_eval: bool) -> SFTConfig:
     """Load SFT training config from environment variables."""
     output_dir = os.environ.get("SFT_OUTPUT_DIR", DEFAULT_SFT_OUTPUT_DIR)
     push_to_hub = os.environ.get("SFT_PUSH_TO_HUB", "false").lower() == "true"
+    eval_steps = int(os.environ.get("SFT_EVAL_STEPS", DEFAULT_EVAL_STEPS))
 
     return SFTConfig(
         output_dir=output_dir,
@@ -147,6 +150,10 @@ def load_sft_config_from_env(use_bf16: bool, use_fp16: bool) -> SFTConfig:
         # SFT-specific
         max_length=int(os.environ.get("SFT_MAX_SEQ_LENGTH", DEFAULT_MAX_SEQ_LENGTH)),
         packing=False,
+        # Evaluation config
+        eval_strategy="steps" if has_eval else "no",
+        eval_steps=eval_steps if has_eval else None,
+        per_device_eval_batch_size=int(os.environ.get("SFT_BATCH_SIZE", DEFAULT_BATCH_SIZE)),
     )
 
 
@@ -162,17 +169,27 @@ def main() -> None:
     if not model_id:
         raise ValueError("BASE_MODEL_ID environment variable is required")
     dataset_id = os.environ.get("SFT_DATASET", DEFAULT_SFT_DATASET)
+    eval_split = float(os.environ.get("SFT_EVAL_SPLIT", DEFAULT_EVAL_SPLIT))
 
     # Detect precision
     cuda_available = torch.cuda.is_available()
     use_bf16 = cuda_available and torch.cuda.is_bf16_supported()
     use_fp16 = not use_bf16 and cuda_available
 
+    # Load dataset first to determine if we have eval set
+    print(f"Loading dataset from {dataset_id}...")
+    train_dataset, eval_dataset = load_hf_dataset(dataset_id, eval_split=eval_split)
+    has_eval = eval_dataset is not None
+    print(f"  Train: {len(train_dataset)} examples")
+    if has_eval:
+        print(f"  Eval:  {len(eval_dataset)} examples ({eval_split*100:.0f}% split)")
+
     # Load configs
-    sft_config = load_sft_config_from_env(use_bf16, use_fp16)
+    sft_config = load_sft_config_from_env(use_bf16, use_fp16, has_eval=has_eval)
     lora_config = load_lora_config_from_env()
 
     # Print configuration
+    print()
     print(f"Model:           {model_id}")
     print(f"Dataset:         {dataset_id}")
     print(f"Output:          {sft_config.output_dir}")
@@ -183,6 +200,8 @@ def main() -> None:
     print(f"Epochs:          {sft_config.num_train_epochs}")
     print(f"LoRA r:          {lora_config.r}")
     print(f"LoRA alpha:      {lora_config.lora_alpha}")
+    if has_eval:
+        print(f"Eval strategy:   every {sft_config.eval_steps} steps")
     print()
     print(f"CUDA available:  {cuda_available}")
     print(f"Using BF16:      {use_bf16}")
@@ -202,11 +221,6 @@ def main() -> None:
     print(f"  pad_token: {tokenizer.pad_token}")
     print(f"  padding_side: {tokenizer.padding_side}")
 
-    # Load dataset
-    print(f"Loading dataset from {dataset_id}...")
-    dataset = load_hf_dataset(dataset_id)
-    print(f"  Loaded {len(dataset)} examples")
-
     # Create SFTTrainer
     # Uses prompt-completion dataset format for automatic prompt masking
     # (completion_only_loss=True by default in SFTConfig)
@@ -214,7 +228,8 @@ def main() -> None:
     trainer = SFTTrainer(
         model=model_id,
         args=sft_config,
-        train_dataset=dataset,
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
         processing_class=tokenizer,
         peft_config=lora_config,
         callbacks=[SFTMetricsCallback(output_path, name="metrics")],

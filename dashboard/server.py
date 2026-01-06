@@ -441,7 +441,7 @@ def parse_sft_metrics(metrics_path: str):
 
     The JSONL file contains:
     - train_start event with config
-    - Per-step metrics: step, epoch, loss, learning_rate, grad_norm
+    - Per-step metrics: step, epoch, loss, learning_rate, grad_norm, eval_loss (optional)
     - train_end event with summary
 
     Returns dict with arrays for plotting.
@@ -453,11 +453,14 @@ def parse_sft_metrics(metrics_path: str):
         "learning_rate": [],
         "grad_norm": [],
         "timestamps": [],
+        "eval_steps": [],
+        "eval_loss": [],
         "train_config": None,
         "train_summary": None,
         "latest_step": None,
         "latest_epoch": None,
         "latest_loss": None,
+        "latest_eval_loss": None,
         "total_entries": 0,
     }
 
@@ -500,13 +503,27 @@ def parse_sft_metrics(metrics_path: str):
                 if step is None:
                     continue
 
-                result["steps"].append(step)
-                result["epochs"].append(entry.get("epoch", 0))
-                result["loss"].append(entry.get("loss"))
-                result["learning_rate"].append(entry.get("learning_rate"))
-                result["grad_norm"].append(entry.get("grad_norm"))
-                result["timestamps"].append(entry.get("timestamp"))
-                result["total_entries"] += 1
+                # Check if this is a train metrics entry (has non-null loss)
+                # or an eval-only entry (loss is null, has eval_loss)
+                # Skip summary entries (they have train_runtime or train_loss keys)
+                loss = entry.get("loss")
+                eval_loss = entry.get("eval_loss")
+                is_summary = "train_runtime" in entry or "train_loss" in entry
+
+                # Only add to main arrays if this is a training step (non-null loss, not summary)
+                if loss is not None and not is_summary:
+                    result["steps"].append(step)
+                    result["epochs"].append(entry.get("epoch", 0))
+                    result["loss"].append(loss)
+                    result["learning_rate"].append(entry.get("learning_rate"))
+                    result["grad_norm"].append(entry.get("grad_norm"))
+                    result["timestamps"].append(entry.get("timestamp"))
+                    result["total_entries"] += 1
+
+                # Track eval_loss separately (logged in separate entries)
+                if eval_loss is not None:
+                    result["eval_steps"].append(step)
+                    result["eval_loss"].append(eval_loss)
 
     except OSError as exc:
         result["error"] = f"Error reading SFT metrics: {exc}"
@@ -517,6 +534,9 @@ def parse_sft_metrics(metrics_path: str):
         result["latest_step"] = result["steps"][-1]
         result["latest_epoch"] = result["epochs"][-1]
         result["latest_loss"] = result["loss"][-1]
+
+    if result["eval_loss"]:
+        result["latest_eval_loss"] = result["eval_loss"][-1]
 
     return result
 

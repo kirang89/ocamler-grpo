@@ -22,7 +22,13 @@ def format_metrics_log_line(logs: dict) -> str:
     loss = logs.get("loss", logs.get("train_loss", 0))
     grad_norm = logs.get("grad_norm", 0)
     lr = logs.get("learning_rate", 0)
-    return f"[Epoch {epoch:.2f}] loss={loss:.4f} grad={grad_norm:.4f} lr={lr:.2e}\n"
+    eval_loss = logs.get("eval_loss")
+
+    line = f"[Epoch {epoch:.2f}] loss={loss:.4f}"
+    if eval_loss is not None:
+        line += f" eval_loss={eval_loss:.4f}"
+    line += f" grad={grad_norm:.4f} lr={lr:.2e}\n"
+    return line
 
 
 def format_metrics_jsonl(logs: dict, step: int, timestamp: str) -> dict[str, Any]:

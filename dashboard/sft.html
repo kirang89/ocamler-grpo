@@ -292,9 +292,15 @@
             </div>
 
             <div class="metric-card">
-                <div class="metric-label">Latest Loss</div>
+                <div class="metric-label">Train Loss</div>
                 <div class="metric-value" id="metricLoss">N/A</div>
                 <div class="metric-sublabel">Cross-entropy loss</div>
+            </div>
+
+            <div class="metric-card">
+                <div class="metric-label">Eval Loss</div>
+                <div class="metric-value" id="metricEvalLoss">N/A</div>
+                <div class="metric-sublabel">Validation loss</div>
             </div>
 
             <div class="metric-card">
@@ -307,7 +313,7 @@
 
         <div class="grid">
             <div class="chart-card">
-                <div class="chart-title">Training Loss</div>
+                <div class="chart-title">Train vs Eval Loss</div>
                 <canvas id="lossChart"></canvas>
             </div>
             <div class="chart-card">
@@ -434,6 +440,49 @@
             });
         }
 
+        function renderDualLossChart(canvasId, trainSteps, trainLoss, evalSteps, evalLoss, options = {}) {
+            destroyChart(canvasId);
+            const ctx = document.getElementById(canvasId).getContext('2d');
+            const colors = getChartColors();
+            const config = getCommonConfig(colors, options.xLabel || 'Step');
+            config.plugins.legend = { display: true, labels: { color: colors.text } };
+
+            // Build eval loss data aligned to train steps (sparse)
+            const evalDataAligned = trainSteps.map(step => {
+                const idx = evalSteps.indexOf(step);
+                return idx >= 0 ? evalLoss[idx] : null;
+            });
+
+            charts[canvasId] = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: trainSteps,
+                    datasets: [
+                        {
+                            label: 'Train Loss',
+                            data: trainLoss,
+                            borderColor: colorPalette.pink,
+                            fill: false,
+                            borderWidth: 3,
+                            pointRadius: 0,
+                            tension: 0.4
+                        },
+                        {
+                            label: 'Eval Loss',
+                            data: evalDataAligned,
+                            borderColor: colorPalette.cyan,
+                            fill: false,
+                            borderWidth: 3,
+                            pointRadius: 4,
+                            tension: 0.4,
+                            spanGaps: true
+                        }
+                    ]
+                },
+                options: config
+            });
+        }
+
         function renderEpochProgress(canvasId, currentEpoch, totalEpochs) {
             destroyChart(canvasId);
             const canvas = document.getElementById(canvasId);
@@ -545,6 +594,14 @@
                 lossEl.textContent = 'N/A';
             }
 
+            // Eval Loss
+            const evalLossEl = document.getElementById('metricEvalLoss');
+            if (data.latest_eval_loss !== null && data.latest_eval_loss !== undefined) {
+                evalLossEl.textContent = parseFloat(data.latest_eval_loss).toFixed(4);
+            } else {
+                evalLossEl.textContent = 'N/A';
+            }
+
             // Epoch progress ring
             const numEpochs = parseFloat(totalEpochs) || 3;
             renderEpochProgress('epochProgress', currentEpoch, numEpochs);
@@ -555,8 +612,12 @@
                 return;
             }
 
-            // Loss over steps
-            renderChart('lossChart', data.steps, data.loss, 'Loss', colorPalette.pink);
+            // Loss over steps (train + eval if available)
+            if (data.eval_steps && data.eval_steps.length > 0) {
+                renderDualLossChart('lossChart', data.steps, data.loss, data.eval_steps, data.eval_loss);
+            } else {
+                renderChart('lossChart', data.steps, data.loss, 'Train Loss', colorPalette.pink);
+            }
 
             // Learning rate over steps
             renderChart('lrChart', data.steps, data.learning_rate, 'Learning Rate', colorPalette.purple, { logScale: true });
