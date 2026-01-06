@@ -21,6 +21,7 @@ def get_optimizer() -> str:
         return "adamw_torch"
     return "adamw_8bit"
 
+
 # GRPO Defaults
 DEFAULT_BATCH_SIZE = 4
 DEFAULT_GRAD_ACCUM_STEPS = 1
