@@ -20,8 +20,8 @@ from .constants import FAILURE_STAGE_PATTERNS, PASS_THRESHOLD
 from .metrics import compute_failure_stages
 from .report import generate_html_report
 
-from environment import prepend_signature
-from reward import _score_completion_vf
+from rlvr.environment import prepend_signature
+from rlvr.reward import _score_completion_vf
 
 # Configuration via environment variables
 LLAMA_URL = os.environ.get("LLAMA_URL", "http://localhost:8080/v1/chat/completions")
