@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from environment import (
+from rlvr.environment import (
     compile_reward,
     count_non_empty_code_lines,
     extract_code_block,

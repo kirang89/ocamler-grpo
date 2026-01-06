@@ -2,7 +2,7 @@
 
 import pytest
 
-from environment import compute_solution_style_penalty
+from rlvr.environment import compute_solution_style_penalty
 
 
 # Dummy code (not used for style check, just need a non-empty string)

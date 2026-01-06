@@ -64,7 +64,7 @@ def get_training_params():
         pass
 
     # 2. Read train.py for defaults
-    train_py_path = os.path.join(os.path.dirname(SCRIPT_DIR), "train.py")
+    train_py_path = os.path.join(os.path.dirname(SCRIPT_DIR), "rlvr", "train.py")
     train_content = ""
     try:
         with open(train_py_path, "r") as f:
