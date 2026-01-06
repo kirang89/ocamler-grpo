@@ -8,12 +8,6 @@ to the standard SFT format (prompt, completion pairs).
 from datasets import Dataset, load_dataset
 
 
-def _prompt_completion_generator(dataset: Dataset):
-    """Yield prompt-completion pairs from the dataset."""
-    for example in dataset:
-        yield {"prompt": example["prompt"], "completion": example["solution"]}
-
-
 def load_hf_dataset(dataset_id: str) -> Dataset:
     """
     Load dataset from HuggingFace and convert to SFT format.
@@ -32,4 +26,4 @@ def load_hf_dataset(dataset_id: str) -> Dataset:
     assert "prompt" in dataset.column_names, f"Dataset must have 'prompt' column, got: {dataset.column_names}"
     assert "solution" in dataset.column_names, f"Dataset must have 'solution' column, got: {dataset.column_names}"
 
-    return Dataset.from_generator(lambda: _prompt_completion_generator(dataset))
+    return Dataset.from_generator(lambda: ({"prompt": ex["prompt"], "completion": ex["solution"]} for ex in dataset))
