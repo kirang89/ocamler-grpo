@@ -41,11 +41,31 @@ echo "=========================================="
 echo ""
 
 # Create output directory
-mkdir -p "${SFT_OUTPUT_DIR:-sft_runs}"
+OUTPUT_DIR="${SFT_OUTPUT_DIR:-sft_runs}"
+mkdir -p "$OUTPUT_DIR"
 
 # Run training in background
 echo "Starting SFT training..."
 nohup uv run python -m sft.train >sft_training.log 2>&1 &
 
+# Start dashboard server
 echo "Starting dashboard server..."
 nohup uv run python dashboard/server.py >dashboard.log 2>&1 &
+
+# Start tensorboard
+TENSORBOARD_PORT="${TENSORBOARD_PORT:-6006}"
+echo "Starting TensorBoard..."
+nohup uv run tensorboard --logdir="$OUTPUT_DIR/logs" --port="$TENSORBOARD_PORT" >tensorboard.log 2>&1 &
+
+echo ""
+echo "=========================================="
+echo "Monitoring"
+echo "=========================================="
+echo "Dashboard:   http://localhost:8080"
+echo "TensorBoard: http://localhost:${TENSORBOARD_PORT}"
+echo ""
+echo "Logs:"
+echo "  Training:    tail -f sft_training.log"
+echo "  Dashboard:   tail -f dashboard.log"
+echo "  TensorBoard: tail -f tensorboard.log"
+echo "=========================================="

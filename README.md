@@ -159,6 +159,20 @@ Quick sanity check:
 SFT_NUM_EPOCHS=0.001 ./scripts/run-sft.sh
 ```
 
+### Monitoring
+
+The training script automatically starts monitoring services:
+
+| Service | URL | Description |
+|---------|-----|-------------|
+| Dashboard | http://localhost:8080 | Real-time training metrics |
+| TensorBoard | http://localhost:6006 | Loss curves, learning rate, gradients |
+
+Logs are written to:
+- `sft_training.log` - Training output
+- `sft_runs/metrics.jsonl` - Structured metrics
+- `sft_runs/metrics.log` - Human-readable metrics summary
+
 ## Project Structure
 
 ```
