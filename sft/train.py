@@ -142,6 +142,7 @@ def load_sft_config_from_env(use_bf16: bool, use_fp16: bool) -> SFTConfig:
         report_to=["tensorboard"],
         logging_dir=f"{output_dir}/logs",
         push_to_hub=push_to_hub,
+        hub_model_id=os.environ.get("SFT_HUB_MODEL_ID"),
         hub_strategy="checkpoint" if push_to_hub else "end",
         # SFT-specific
         max_length=int(os.environ.get("SFT_MAX_SEQ_LENGTH", DEFAULT_MAX_SEQ_LENGTH)),
