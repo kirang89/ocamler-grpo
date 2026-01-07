@@ -96,33 +96,59 @@ def map_reason_to_failure_stage(reason: str | None) -> str:
         reason: The reason string from _score_completion_vf
 
     Returns:
-        Failure stage: "type_check", "compile", "execution", "style", "degenerate", or ""
+        Failure stage category string
     """
     if reason is None:
         return ""
 
     reason_lower = reason.lower()
 
-    if "syntax error" in reason_lower or "type error" in reason_lower:
-        return "type_check"
+    # Type checking failures
+    if "syntax error" in reason_lower:
+        return "type_check:syntax"
+    if "type error" in reason_lower:
+        return "type_check:type"
     if "timeout (type_check)" in reason_lower:
-        return "type_check"
+        return "type_check:timeout"
+
+    # Compile failures
     if "compile failure" in reason_lower:
         return "compile"
+    if "timeout (compile)" in reason_lower:
+        return "compile:timeout"
+    if "unbound module" in reason_lower:
+        return "compile:unbound_module"
+    if "unbound value" in reason_lower:
+        return "compile:unbound_value"
+
+    # Execution/test failures
     if "test failure" in reason_lower:
-        return "execution"
+        return "execution:test_fail"
     if "timeout (tests)" in reason_lower:
-        return "execution"
+        return "execution:timeout"
+    if "exception" in reason_lower or "fatal error" in reason_lower:
+        return "execution:exception"
+
+    # Style issues (passed but with penalties)
     if reason_lower.startswith("style:"):
         return "style"
-    # Degenerate reasons (repetitive, low code purity, etc.)
-    if any(
-        x in reason_lower
-        for x in ["repetitive", "code purity", "code block spam", "stub"]
-    ):
-        return "degenerate"
 
-    return "other"
+    # Degenerate outputs
+    if "repetitive" in reason_lower:
+        return "degenerate:repetitive"
+    if "low code ratio" in reason_lower or "code purity" in reason_lower:
+        return "degenerate:low_code_ratio"
+    if "code block spam" in reason_lower:
+        return "degenerate:code_block_spam"
+    if "stub" in reason_lower:
+        return "degenerate:stub"
+
+    # Empty/short output
+    if "empty" in reason_lower or "too short" in reason_lower:
+        return "degenerate:empty"
+
+    # Catch-all with the actual reason for debugging
+    return f"other:{reason_lower[:30]}"
 
 
 def evaluate_solution(pid: str, completion: str, tests: str) -> Dict[str, Any]:
