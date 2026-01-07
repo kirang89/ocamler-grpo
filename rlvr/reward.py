@@ -17,7 +17,7 @@ import os
 import tempfile
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List
 
 from rlvr.environment import (
     MIN_NON_EMPTY_LINES,
@@ -26,7 +26,6 @@ from rlvr.environment import (
     compute_solution_style_penalty,
     count_non_empty_code_lines,
     extract_code_block,
-    extract_function_signature,
     is_degenerate_output,
     prepend_signature,
     tests_reward,

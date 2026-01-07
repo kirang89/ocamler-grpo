@@ -7,7 +7,6 @@ This module provides environment-driven configuration for:
 
 import os
 
-import torch
 from peft import LoraConfig, TaskType
 from trl import GRPOConfig
 
@@ -53,6 +52,9 @@ def create_grpo_config(temperature=None, output_dir=None) -> GRPOConfig:
     Returns:
         GRPOConfig configured from environment variables with sensible defaults
     """
+    # Deferred import - torch must be imported after _ensure_cuda_driver() in train.py
+    import torch
+
     # Detect CUDA availability
     cuda_available = torch.cuda.is_available()
     use_bf16 = cuda_available and torch.cuda.is_bf16_supported()
