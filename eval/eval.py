@@ -476,6 +476,113 @@ def print_summary(results: List[Dict[str, Any]]) -> None:
             print(f"  {stage}: {count}")
 
 
+def generate_html_report(
+    results: List[Dict[str, Any]],
+    run_dir: Path,
+    model_name: str,
+    input_csv: str,
+) -> None:
+    """
+    Generate a static HTML report for the evaluation run.
+
+    Uses Jinja2 to render the report template with computed metrics.
+
+    Args:
+        results: List of result dictionaries
+        run_dir: Directory to write the report to
+        model_name: Name of the model being evaluated
+        input_csv: Path to the input CSV file
+    """
+    from jinja2 import Environment, FileSystemLoader
+
+    total = len(results)
+    if total == 0:
+        return
+
+    # Compute metrics
+    passed = sum(1 for r in results if r["total_reward"] >= 1.0)
+    type_check_pass = sum(1 for r in results if r["type_score"] >= 0.25)
+    compiles = sum(1 for r in results if r["compile_score"] >= 0.10)
+    tests_pass = sum(1 for r in results if r["test_score"] >= 0.65)
+
+    pass_rate = passed / total * 100
+    type_check_rate = type_check_pass / total * 100
+    compile_rate = compiles / total * 100
+    test_pass_rate = tests_pass / total * 100
+
+    avg_reward = sum(r["total_reward"] for r in results) / total
+
+    # Generation time stats
+    gen_times = [r["generation_time_sec"] for r in results if r["generation_time_sec"] > 0]
+    avg_gen_time = sum(gen_times) / len(gen_times) if gen_times else 0.0
+    total_gen_time = sum(gen_times)
+
+    # Failure stage breakdown
+    failure_stages: Dict[str, int] = {}
+    for r in results:
+        stage = r["failure_stage"]
+        if stage:
+            failure_stages[stage] = failure_stages.get(stage, 0) + 1
+
+    # Difficulty breakdown
+    difficulty_stats: Dict[str, Dict[str, int]] = {}
+    for r in results:
+        diff = r.get("difficulty", "unknown") or "unknown"
+        if diff not in difficulty_stats:
+            difficulty_stats[diff] = {"total": 0, "passed": 0}
+        difficulty_stats[diff]["total"] += 1
+        if r["total_reward"] >= 1.0:
+            difficulty_stats[diff]["passed"] += 1
+
+    # Prepare chart data
+    failure_stages_sorted = sorted(failure_stages.items(), key=lambda x: -x[1])
+    failure_data = {
+        "labels": [s[0] for s in failure_stages_sorted],
+        "counts": [s[1] for s in failure_stages_sorted],
+    }
+
+    difficulty_labels = list(difficulty_stats.keys())
+    difficulty_data = {
+        "labels": difficulty_labels,
+        "passed": [difficulty_stats[d]["passed"] for d in difficulty_labels],
+        "failed": [difficulty_stats[d]["total"] - difficulty_stats[d]["passed"] for d in difficulty_labels],
+    }
+
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    input_file = Path(input_csv).name
+
+    # Load and render template
+    template_dir = Path(__file__).parent
+    env = Environment(loader=FileSystemLoader(template_dir))
+    template = env.get_template("report_template.html")
+
+    html_content = template.render(
+        model_name=model_name,
+        timestamp=timestamp,
+        input_csv=input_csv,
+        input_file=input_file,
+        total=total,
+        passed=passed,
+        type_check_pass=type_check_pass,
+        compiles=compiles,
+        tests_pass=tests_pass,
+        pass_rate=pass_rate,
+        type_check_rate=type_check_rate,
+        compile_rate=compile_rate,
+        test_pass_rate=test_pass_rate,
+        avg_reward=avg_reward,
+        avg_gen_time=avg_gen_time,
+        total_gen_time=total_gen_time,
+        failure_stages_sorted=failure_stages_sorted,
+        failure_data=failure_data,
+        difficulty_data=difficulty_data,
+    )
+
+    report_path = run_dir / "report.html"
+    with open(report_path, "w", encoding="utf-8") as f:
+        f.write(html_content)
+
+
 def main():
     """Main entry point."""
     # Generate output directory with model name and timestamp
@@ -498,10 +605,12 @@ def main():
     results, completions = process_csv(INPUT_CSV)
     write_results(results, str(results_path))
     write_completions(completions, str(completions_path))
+    generate_html_report(results, run_dir, LLAMA_MODEL, INPUT_CSV)
 
     print(f"\nResults written to:")
     print(f"  CSV: {results_path}")
     print(f"  Completions: {completions_path}")
+    print(f"  Report: {run_dir / 'report.html'}")
     print_summary(results)
 
 

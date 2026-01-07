@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Eval Report - {{ model_name }}</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --bg-color: #0f0f1a;
+            --text-color: #e0e0e0;
+            --card-bg: #1a1a2e;
+            --subtitle-color: #888;
+            --chart-title-color: #fff;
+            --grid-color: #333;
+            --tick-color: #888;
+            --accent-cyan: #22d3d1;
+            --accent-pink: #f472b6;
+            --accent-purple: #a78bfa;
+            --accent-green: #4ade80;
+            --accent-blue: #60a5fa;
+            --accent-yellow: #fbbf24;
+            --accent-orange: #fb923c;
+        }
+
+        [data-theme="light"] {
+            --bg-color: #f3f4f6;
+            --text-color: #1f2937;
+            --card-bg: #ffffff;
+            --subtitle-color: #6b7280;
+            --chart-title-color: #111827;
+            --grid-color: #e5e7eb;
+            --tick-color: #6b7280;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg-color);
+            color: var(--text-color);
+            padding: 20px;
+            min-height: 100vh;
+            transition: background-color 0.3s, color 0.3s;
+        }
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+            max-width: 1400px;
+            margin-left: auto;
+            margin-right: auto;
+            padding: 0 10px;
+        }
+        .header-content { text-align: left; }
+        h1 {
+            font-size: 1.8rem;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+        .subtitle {
+            color: var(--subtitle-color);
+            font-size: 0.9rem;
+        }
+        .theme-toggle {
+            background: var(--card-bg);
+            border: 1px solid var(--grid-color);
+            color: var(--text-color);
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: all 0.2s;
+        }
+        .theme-toggle:hover { opacity: 0.8; }
+        .metric-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 16px;
+            max-width: 1400px;
+            margin: 0 auto 32px auto;
+        }
+        .metric-card {
+            background: var(--card-bg);
+            border-radius: 12px;
+            padding: 20px;
+            border: 1px solid var(--grid-color);
+            text-align: center;
+        }
+        .metric-label {
+            font-size: 0.85rem;
+            color: var(--subtitle-color);
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .metric-value {
+            font-size: 2.5rem;
+            font-weight: 700;
+            color: var(--accent-cyan);
+            line-height: 1;
+        }
+        .metric-value.success { color: var(--accent-green); }
+        .metric-value.warning { color: var(--accent-yellow); }
+        .metric-sublabel {
+            font-size: 0.8rem;
+            color: var(--subtitle-color);
+            margin-top: 6px;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 20px;
+            max-width: 1400px;
+            margin: 0 auto 32px auto;
+        }
+        .chart-card {
+            background: var(--card-bg);
+            border-radius: 16px;
+            padding: 24px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        .chart-title {
+            font-size: 1rem;
+            font-weight: 500;
+            margin-bottom: 16px;
+            color: var(--chart-title-color);
+        }
+        canvas {
+            width: 100% !important;
+            height: 280px !important;
+        }
+        .params-container {
+            max-width: 1400px;
+            margin: 32px auto;
+            background: var(--card-bg);
+            padding: 20px;
+            border-radius: 12px;
+            border: 1px solid var(--grid-color);
+        }
+        .params-container h3 {
+            margin: 0 0 15px 0;
+            text-align: center;
+            font-size: 1.1rem;
+            color: var(--chart-title-color);
+            font-weight: 500;
+        }
+        .params-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9rem;
+        }
+        .params-table td {
+            padding: 8px 12px;
+            border-bottom: 1px solid var(--grid-color);
+        }
+        .params-table tr:last-child td { border-bottom: none; }
+        .param-key {
+            text-align: right;
+            width: 40%;
+            font-weight: 600;
+            color: var(--subtitle-color);
+        }
+        .param-value {
+            text-align: left;
+            color: var(--text-color);
+        }
+        .failure-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85rem;
+            margin-top: 16px;
+        }
+        .failure-table th, .failure-table td {
+            padding: 10px 12px;
+            text-align: left;
+            border-bottom: 1px solid var(--grid-color);
+        }
+        .failure-table th {
+            color: var(--subtitle-color);
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 0.75rem;
+            letter-spacing: 0.5px;
+        }
+        .failure-table tr:last-child td { border-bottom: none; }
+        .bar {
+            background: var(--accent-pink);
+            height: 8px;
+            border-radius: 4px;
+            display: inline-block;
+            vertical-align: middle;
+            margin-left: 8px;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="header-content">
+            <h1>Evaluation Report</h1>
+            <p class="subtitle">{{ model_name }} | {{ timestamp }}</p>
+        </div>
+        <button id="themeToggle" class="theme-toggle">Switch Theme</button>
+    </header>
+
+    <div class="metric-cards">
+        <div class="metric-card">
+            <div class="metric-label">Total Problems</div>
+            <div class="metric-value">{{ total }}</div>
+            <div class="metric-sublabel">from {{ input_file }}</div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-label">Pass@1</div>
+            <div class="metric-value success">{{ "%.1f"|format(pass_rate) }}%</div>
+            <div class="metric-sublabel">{{ passed }}/{{ total }} passed</div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-label">Type Check Rate</div>
+            <div class="metric-value">{{ "%.1f"|format(type_check_rate) }}%</div>
+            <div class="metric-sublabel">{{ type_check_pass }}/{{ total }}</div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-label">Compile Rate</div>
+            <div class="metric-value">{{ "%.1f"|format(compile_rate) }}%</div>
+            <div class="metric-sublabel">{{ compiles }}/{{ total }}</div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-label">Test Pass Rate</div>
+            <div class="metric-value">{{ "%.1f"|format(test_pass_rate) }}%</div>
+            <div class="metric-sublabel">{{ tests_pass }}/{{ total }}</div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-label">Avg Reward</div>
+            <div class="metric-value warning">{{ "%.3f"|format(avg_reward) }}</div>
+            <div class="metric-sublabel">mean total reward</div>
+        </div>
+    </div>
+
+    <div class="grid">
+        <div class="chart-card">
+            <div class="chart-title">Failure Stage Breakdown</div>
+            <canvas id="failureChart"></canvas>
+        </div>
+        <div class="chart-card">
+            <div class="chart-title">Pass Rate by Difficulty</div>
+            <canvas id="difficultyChart"></canvas>
+        </div>
+    </div>
+
+    <div class="params-container">
+        <h3>Evaluation Configuration</h3>
+        <table class="params-table">
+            <tbody>
+                <tr><td class="param-key">Model</td><td class="param-value">{{ model_name }}</td></tr>
+                <tr><td class="param-key">Input CSV</td><td class="param-value">{{ input_csv }}</td></tr>
+                <tr><td class="param-key">Total Problems</td><td class="param-value">{{ total }}</td></tr>
+                <tr><td class="param-key">Avg Generation Time</td><td class="param-value">{{ "%.2f"|format(avg_gen_time) }}s</td></tr>
+                <tr><td class="param-key">Total Generation Time</td><td class="param-value">{{ "%.1f"|format(total_gen_time) }}s</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div class="params-container">
+        <h3>Failure Stage Details</h3>
+        <table class="failure-table">
+            <thead>
+                <tr>
+                    <th>Stage</th>
+                    <th>Count</th>
+                    <th>Percentage</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for stage, count in failure_stages_sorted %}
+                <tr>
+                    <td>{{ stage }}</td>
+                    <td>{{ count }}</td>
+                    <td>{{ "%.1f"|format(count / total * 100) }}%</td>
+                    <td><span class="bar" style="width: {{ count / total * 200 }}px;"></span></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <script>
+        const failureData = {{ failure_data | tojson }};
+        const difficultyData = {{ difficulty_data | tojson }};
+
+        const colorPalette = {
+            cyan: '#22d3d1',
+            pink: '#f472b6',
+            purple: '#a78bfa',
+            green: '#4ade80',
+            blue: '#60a5fa',
+            yellow: '#fbbf24',
+            orange: '#fb923c',
+            red: '#ef4444'
+        };
+        const chartColors = [
+            colorPalette.pink, colorPalette.blue, colorPalette.yellow,
+            colorPalette.orange, colorPalette.purple, colorPalette.cyan,
+            colorPalette.green, colorPalette.red
+        ];
+
+        function initTheme() {
+            const savedTheme = localStorage.getItem('theme') || 'dark';
+            document.documentElement.setAttribute('data-theme', savedTheme);
+            updateToggleButton(savedTheme);
+        }
+
+        function toggleTheme() {
+            const currentTheme = document.documentElement.getAttribute('data-theme');
+            const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+            document.documentElement.setAttribute('data-theme', newTheme);
+            localStorage.setItem('theme', newTheme);
+            updateToggleButton(newTheme);
+        }
+
+        function updateToggleButton(theme) {
+            const btn = document.getElementById('themeToggle');
+            btn.textContent = theme === 'light' ? 'Dark Mode' : 'Light Mode';
+        }
+
+        document.getElementById('themeToggle').addEventListener('click', toggleTheme);
+        initTheme();
+
+        function getChartColors() {
+            const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+            return {
+                grid: isLight ? '#e5e7eb' : '#333',
+                tick: isLight ? '#6b7280' : '#888',
+                text: isLight ? '#374151' : '#ccc'
+            };
+        }
+
+        // Failure breakdown doughnut chart
+        if (failureData.labels.length > 0) {
+            const ctx1 = document.getElementById('failureChart').getContext('2d');
+            new Chart(ctx1, {
+                type: 'doughnut',
+                data: {
+                    labels: failureData.labels,
+                    datasets: [{
+                        data: failureData.counts,
+                        backgroundColor: chartColors.slice(0, failureData.labels.length),
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'right',
+                            labels: {
+                                color: getChartColors().text,
+                                padding: 12,
+                                font: { size: 11 }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Difficulty breakdown stacked bar chart
+        if (difficultyData.labels.length > 0) {
+            const ctx2 = document.getElementById('difficultyChart').getContext('2d');
+            const colors = getChartColors();
+            new Chart(ctx2, {
+                type: 'bar',
+                data: {
+                    labels: difficultyData.labels,
+                    datasets: [
+                        {
+                            label: 'Passed',
+                            data: difficultyData.passed,
+                            backgroundColor: colorPalette.green,
+                            borderRadius: 4
+                        },
+                        {
+                            label: 'Failed',
+                            data: difficultyData.failed,
+                            backgroundColor: colorPalette.pink,
+                            borderRadius: 4
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            labels: { color: colors.text }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            stacked: true,
+                            ticks: { color: colors.tick },
+                            grid: { color: colors.grid }
+                        },
+                        y: {
+                            stacked: true,
+                            ticks: { color: colors.tick },
+                            grid: { color: colors.grid }
+                        }
+                    }
+                }
+            });
+        }
+    </script>
+</body>
+</html>
