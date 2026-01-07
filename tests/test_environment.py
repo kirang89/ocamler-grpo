@@ -654,7 +654,7 @@ class TestRewardInterface:
         params = list(sig.parameters.keys())
 
         assert params == ["completion", "info", "state"]
-        assert sig.return_annotation == float or sig.return_annotation == inspect.Signature.empty
+        assert sig.return_annotation is float or sig.return_annotation is inspect.Signature.empty
 
     def test_reward_return_type(self):
         """Test that ocaml_reward returns a float."""
