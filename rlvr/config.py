@@ -6,9 +6,20 @@ This module provides environment-driven configuration for:
 """
 
 import os
+import sys
 
 from peft import LoraConfig, TaskType
 from trl import GRPOConfig
+
+
+def get_optimizer() -> str:
+    """Get platform-aware optimizer.
+
+    Returns adamw_8bit on Linux (with bitsandbytes), falls back to adamw_torch on Mac.
+    """
+    if sys.platform == "darwin":
+        return "adamw_torch"
+    return "adamw_8bit"
 
 # GRPO Defaults
 DEFAULT_BATCH_SIZE = 4
@@ -134,7 +145,7 @@ def create_grpo_config(temperature=None, output_dir=None) -> GRPOConfig:
         lr_scheduler_type="cosine",
         warmup_ratio=DEFAULT_WARMUP_RATIO,
         weight_decay=DEFAULT_WEIGHT_DECAY,
-        optim=DEFAULT_OPTIMIZER,
+        optim=get_optimizer(),
         push_to_hub=True,
         hub_strategy="end",
     )
