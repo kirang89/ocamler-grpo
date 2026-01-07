@@ -12,9 +12,13 @@ import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 import requests
+
+from .constants import FAILURE_STAGE_PATTERNS, PASS_THRESHOLD
+from .metrics import compute_failure_stages
+from .report import generate_html_report
 
 from environment import prepend_signature
 from reward import _score_completion_vf
@@ -103,171 +107,66 @@ def map_reason_to_failure_stage(reason: str | None) -> str:
 
     reason_lower = reason.lower()
 
-    # Type checking failures
-    if "syntax error" in reason_lower:
-        return "type_check:syntax"
-    if "type error" in reason_lower:
-        return "type_check:type"
-    if "timeout (type_check)" in reason_lower:
-        return "type_check:timeout"
-
-    # Compile failures
-    if "compile failure" in reason_lower:
-        return "compile"
-    if "timeout (compile)" in reason_lower:
-        return "compile:timeout"
-    if "unbound module" in reason_lower:
-        return "compile:unbound_module"
-    if "unbound value" in reason_lower:
-        return "compile:unbound_value"
-
-    # Execution/test failures
-    if "test failure" in reason_lower:
-        return "execution:test_fail"
-    if "timeout (tests)" in reason_lower:
-        return "execution:timeout"
-    if "exception" in reason_lower or "fatal error" in reason_lower:
-        return "execution:exception"
-
-    # Style issues (passed but with penalties)
+    # Style prefix check
     if reason_lower.startswith("style:"):
         return "style"
 
-    # Degenerate outputs
-    if "repetitive" in reason_lower:
-        return "degenerate:repetitive"
-    if "low code ratio" in reason_lower or "code purity" in reason_lower:
-        return "degenerate:low_code_ratio"
-    if "code block spam" in reason_lower:
-        return "degenerate:code_block_spam"
-    if "stub" in reason_lower:
-        return "degenerate:stub"
+    # Exception/fatal error (multi-condition)
+    if "exception" in reason_lower or "fatal error" in reason_lower:
+        return "execution:exception"
 
-    # Empty/short output
-    if "empty" in reason_lower or "too short" in reason_lower:
-        return "degenerate:empty"
+    # Pattern matching
+    for pattern, stage in FAILURE_STAGE_PATTERNS:
+        if pattern in reason_lower:
+            return stage
 
-    # Catch-all with the actual reason for debugging
     return f"other:{reason_lower[:30]}"
 
 
-def evaluate_solution(pid: str, completion: str, tests: str) -> Dict[str, Any]:
-    """
-    Evaluate a solution using the reward system.
-
-    Args:
-        pid: Problem ID
-        completion: The model's completion (with signature prepended)
-        tests: The test code to append
-
-    Returns:
-        Dictionary with scoring details
-    """
+def evaluate_solution(pid: str, completion: str, tests: str) -> dict[str, Any]:
+    """Evaluate a solution using the reward system."""
     return _score_completion_vf(pid, completion, tests)
 
 
-def read_problems(input_path: str) -> List[Dict[str, Any]]:
-    """
-    Read problems from CSV file.
-
-    Args:
-        input_path: Path to input CSV file
-
-    Returns:
-        List of problem dictionaries
-    """
+def read_problems(input_path: str) -> list[dict[str, Any]]:
+    """Read problems from CSV file."""
     with open(input_path, "r", encoding="utf-8") as f:
         return list(csv.DictReader(f))
 
 
-def build_error_result(pid: str, difficulty: str) -> Dict[str, Any]:
-    """
-    Build result dictionary for generation errors.
-
-    Args:
-        pid: Problem ID
-        difficulty: Problem difficulty level
-
-    Returns:
-        Result dictionary with zero scores
-    """
+def _base_scores(eval_result: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Build base score fields from eval result or zeros for errors."""
+    if eval_result is None:
+        return {
+            "total_reward": 0.0,
+            "base_reward": 0.0,
+            "type_score": 0.0,
+            "compile_score": 0.0,
+            "test_score": 0.0,
+            "failure_stage": "generation_error",
+        }
     return {
-        "id": pid,
-        "difficulty": difficulty,
-        "total_reward": 0.0,
-        "base_reward": 0.0,
-        "type_score": 0.0,
-        "compile_score": 0.0,
-        "test_score": 0.0,
-        "failure_stage": "generation_error",
-        "generation_time_sec": 0.0,
-        "completion_length": 0,
-    }
-
-
-def build_error_completion(
-    pid: str, difficulty: str, problem_text: str, tests: str, exc: Exception
-) -> Dict[str, Any]:
-    """
-    Build completion dictionary for generation errors.
-
-    Args:
-        pid: Problem ID
-        difficulty: Problem difficulty level
-        problem_text: The problem description
-        tests: The test code
-        exc: The exception that occurred
-
-    Returns:
-        Completion dictionary with error details
-    """
-    return {
-        "id": pid,
-        "difficulty": difficulty,
-        "problem_text": problem_text,
-        "tests": tests,
-        "raw_completion": "",
-        "full_completion": "",
-        "error": str(exc),
-        "total_reward": 0.0,
-        "base_reward": 0.0,
-        "type_score": 0.0,
-        "compile_score": 0.0,
-        "test_score": 0.0,
-        "failure_stage": "generation_error",
-        "generation_time_sec": 0.0,
-        "completion_length": 0,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "model": LLAMA_MODEL,
-    }
-
-
-def build_result(
-    pid: str, difficulty: str, eval_result: Dict[str, Any], generation_time: float, completion: str
-) -> Dict[str, Any]:
-    """
-    Build result dictionary from evaluation.
-
-    Args:
-        pid: Problem ID
-        difficulty: Problem difficulty level
-        eval_result: Evaluation result from reward system
-        generation_time: Time taken to generate solution
-        completion: The raw completion text
-
-    Returns:
-        Result dictionary with scores
-    """
-    failure_stage = map_reason_to_failure_stage(eval_result.get("reason"))
-    return {
-        "id": pid,
-        "difficulty": difficulty,
         "total_reward": eval_result["total_reward"],
         "base_reward": eval_result["base_reward"],
         "type_score": eval_result["type_score"],
         "compile_score": eval_result["compile_score"],
         "test_score": eval_result["test_score"],
-        "failure_stage": failure_stage,
+        "failure_stage": map_reason_to_failure_stage(eval_result.get("reason")),
+    }
+
+
+def build_result(
+    pid: str,
+    difficulty: str,
+    eval_result: dict[str, Any] | None,
+    generation_time: float = 0.0,
+    completion: str = "",
+) -> dict[str, Any]:
+    """Build result dictionary from evaluation or error."""
+    return {
+        "id": pid,
+        "difficulty": difficulty,
+        **_base_scores(eval_result),
         "generation_time_sec": round(generation_time, 2),
         "completion_length": len(completion),
     }
@@ -278,58 +177,33 @@ def build_completion(
     difficulty: str,
     problem_text: str,
     tests: str,
-    completion: str,
-    full_completion: str,
-    eval_result: Dict[str, Any],
-    generation_time: float,
-) -> Dict[str, Any]:
-    """
-    Build completion dictionary from successful generation.
-
-    Args:
-        pid: Problem ID
-        difficulty: Problem difficulty level
-        problem_text: The problem description
-        tests: The test code
-        completion: The raw completion text
-        full_completion: Completion with signature prepended
-        eval_result: Evaluation result from reward system
-        generation_time: Time taken to generate solution
-
-    Returns:
-        Completion dictionary with all details
-    """
-    failure_stage = map_reason_to_failure_stage(eval_result.get("reason"))
-    return {
+    eval_result: dict[str, Any] | None,
+    generation_time: float = 0.0,
+    completion: str = "",
+    full_completion: str = "",
+    error: str = "",
+) -> dict[str, Any]:
+    """Build completion dictionary from evaluation or error."""
+    result = {
         "id": pid,
         "difficulty": difficulty,
         "problem_text": problem_text,
         "tests": tests,
         "raw_completion": completion,
         "full_completion": full_completion,
-        "total_reward": eval_result["total_reward"],
-        "base_reward": eval_result["base_reward"],
-        "type_score": eval_result["type_score"],
-        "compile_score": eval_result["compile_score"],
-        "test_score": eval_result["test_score"],
-        "failure_stage": failure_stage,
+        **_base_scores(eval_result),
         "generation_time_sec": round(generation_time, 2),
         "completion_length": len(completion),
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "model": LLAMA_MODEL,
     }
+    if error:
+        result["error"] = error
+    return result
 
 
-def process_single_problem(problem: Dict[str, Any]) -> tuple[Dict[str, Any], Dict[str, Any]]:
-    """
-    Process a single problem and return results.
-
-    Args:
-        problem: Problem dictionary from CSV
-
-    Returns:
-        Tuple of (result, completion) dictionaries
-    """
+def process_single_problem(problem: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Process a single problem and return (result, completion) dictionaries."""
     pid = problem["id"]
     problem_text = problem["problem"]
     tests = problem["tests"]
@@ -339,51 +213,33 @@ def process_single_problem(problem: Dict[str, Any]) -> tuple[Dict[str, Any], Dic
         completion, generation_time = generate_solution(problem_text)
     except Exception as exc:
         return (
-            build_error_result(pid, difficulty),
-            build_error_completion(pid, difficulty, problem_text, tests, exc),
+            build_result(pid, difficulty, None),
+            build_completion(pid, difficulty, problem_text, tests, None, error=str(exc)),
         )
 
-    # Prepend function signature to completion
     full_completion = prepend_signature(problem_text, completion)
-
-    # Evaluate using reward system
     eval_result = evaluate_solution(pid, full_completion, tests)
 
     return (
         build_result(pid, difficulty, eval_result, generation_time, completion),
         build_completion(
-            pid, difficulty, problem_text, tests, completion, full_completion, eval_result, generation_time
+            pid, difficulty, problem_text, tests, eval_result,
+            generation_time, completion, full_completion,
         ),
     )
 
 
-def print_problem_status(i: int, total: int, pid: str, result: Dict[str, Any]) -> None:
-    """
-    Print processing status for a single problem.
-
-    Args:
-        i: Current problem index (0-based)
-        total: Total number of problems
-        pid: Problem ID
-        result: Result dictionary
-    """
+def print_problem_status(i: int, total: int, pid: str, result: dict[str, Any]) -> None:
+    """Print processing status for a single problem."""
     print(f"[{i + 1}/{total}] Processing {pid}...", end=" ", flush=True)
-    if result["total_reward"] >= 1.0:
+    if result["total_reward"] >= PASS_THRESHOLD:
         print(f"PASS (reward={result['total_reward']:.2f})")
     else:
         print(f"FAIL (reward={result['total_reward']:.2f}, stage={result['failure_stage']})")
 
 
-def process_csv(input_path: str) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-    """
-    Process all problems in the CSV file.
-
-    Args:
-        input_path: Path to input CSV file
-
-    Returns:
-        Tuple of (results, completions) - both are lists of dictionaries
-    """
+def process_csv(input_path: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Process all problems in the CSV file and return (results, completions)."""
     problems = read_problems(input_path)
     results = []
     completions = []
@@ -397,69 +253,38 @@ def process_csv(input_path: str) -> tuple[List[Dict[str, Any]], List[Dict[str, A
     return results, completions
 
 
-def write_results(results: List[Dict[str, Any]], output_path: str) -> None:
-    """
-    Write results to a CSV file.
+RESULT_FIELDNAMES = [
+    "id", "difficulty", "total_reward", "base_reward", "type_score",
+    "compile_score", "test_score", "failure_stage", "generation_time_sec", "completion_length",
+]
 
-    Args:
-        results: List of result dictionaries
-        output_path: Path to output CSV file
-    """
-    fieldnames = [
-        "id",
-        "difficulty",
-        "total_reward",
-        "base_reward",
-        "type_score",
-        "compile_score",
-        "test_score",
-        "failure_stage",
-        "generation_time_sec",
-        "completion_length",
-    ]
 
+def write_results(results: list[dict[str, Any]], output_path: str) -> None:
+    """Write results to a CSV file."""
     with open(output_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer = csv.DictWriter(f, fieldnames=RESULT_FIELDNAMES)
         writer.writeheader()
         writer.writerows(results)
 
 
-def write_completions(completions: List[Dict[str, Any]], output_path: str) -> None:
-    """
-    Write completions to a JSONL file.
-
-    Args:
-        completions: List of completion dictionaries
-        output_path: Path to output JSONL file
-    """
+def write_completions(completions: list[dict[str, Any]], output_path: str) -> None:
+    """Write completions to a JSONL file."""
     with open(output_path, "w", encoding="utf-8") as f:
         for completion in completions:
             f.write(json.dumps(completion, ensure_ascii=False) + "\n")
 
 
-def print_summary(results: List[Dict[str, Any]]) -> None:
-    """
-    Print summary statistics.
-
-    Args:
-        results: List of result dictionaries
-    """
+def print_summary(results: list[dict[str, Any]]) -> None:
+    """Print summary statistics."""
     total = len(results)
     if total == 0:
         print("No results to summarize.")
         return
 
-    passed = sum(1 for r in results if r["total_reward"] >= 1.0)
+    passed = sum(1 for r in results if r["total_reward"] >= PASS_THRESHOLD)
     pass_rate = passed / total * 100
+    failure_stages = compute_failure_stages(results)
 
-    # Failure stage breakdown
-    failure_stages: Dict[str, int] = {}
-    for r in results:
-        stage = r["failure_stage"]
-        if stage:
-            failure_stages[stage] = failure_stages.get(stage, 0) + 1
-
-    # Average generation time
     gen_times = [r["generation_time_sec"] for r in results if r["generation_time_sec"] > 0]
     avg_gen_time = sum(gen_times) / len(gen_times) if gen_times else 0.0
 
@@ -474,113 +299,6 @@ def print_summary(results: List[Dict[str, Any]]) -> None:
         print("\nFailure breakdown:")
         for stage, count in sorted(failure_stages.items(), key=lambda x: -x[1]):
             print(f"  {stage}: {count}")
-
-
-def generate_html_report(
-    results: List[Dict[str, Any]],
-    run_dir: Path,
-    model_name: str,
-    input_csv: str,
-) -> None:
-    """
-    Generate a static HTML report for the evaluation run.
-
-    Uses Jinja2 to render the report template with computed metrics.
-
-    Args:
-        results: List of result dictionaries
-        run_dir: Directory to write the report to
-        model_name: Name of the model being evaluated
-        input_csv: Path to the input CSV file
-    """
-    from jinja2 import Environment, FileSystemLoader
-
-    total = len(results)
-    if total == 0:
-        return
-
-    # Compute metrics
-    passed = sum(1 for r in results if r["total_reward"] >= 1.0)
-    type_check_pass = sum(1 for r in results if r["type_score"] >= 0.25)
-    compiles = sum(1 for r in results if r["compile_score"] >= 0.10)
-    tests_pass = sum(1 for r in results if r["test_score"] >= 0.65)
-
-    pass_rate = passed / total * 100
-    type_check_rate = type_check_pass / total * 100
-    compile_rate = compiles / total * 100
-    test_pass_rate = tests_pass / total * 100
-
-    avg_reward = sum(r["total_reward"] for r in results) / total
-
-    # Generation time stats
-    gen_times = [r["generation_time_sec"] for r in results if r["generation_time_sec"] > 0]
-    avg_gen_time = sum(gen_times) / len(gen_times) if gen_times else 0.0
-    total_gen_time = sum(gen_times)
-
-    # Failure stage breakdown
-    failure_stages: Dict[str, int] = {}
-    for r in results:
-        stage = r["failure_stage"]
-        if stage:
-            failure_stages[stage] = failure_stages.get(stage, 0) + 1
-
-    # Difficulty breakdown
-    difficulty_stats: Dict[str, Dict[str, int]] = {}
-    for r in results:
-        diff = r.get("difficulty", "unknown") or "unknown"
-        if diff not in difficulty_stats:
-            difficulty_stats[diff] = {"total": 0, "passed": 0}
-        difficulty_stats[diff]["total"] += 1
-        if r["total_reward"] >= 1.0:
-            difficulty_stats[diff]["passed"] += 1
-
-    # Prepare chart data
-    failure_stages_sorted = sorted(failure_stages.items(), key=lambda x: -x[1])
-    failure_data = {
-        "labels": [s[0] for s in failure_stages_sorted],
-        "counts": [s[1] for s in failure_stages_sorted],
-    }
-
-    difficulty_labels = list(difficulty_stats.keys())
-    difficulty_data = {
-        "labels": difficulty_labels,
-        "passed": [difficulty_stats[d]["passed"] for d in difficulty_labels],
-        "failed": [difficulty_stats[d]["total"] - difficulty_stats[d]["passed"] for d in difficulty_labels],
-    }
-
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    input_file = Path(input_csv).name
-
-    # Load and render template
-    template_dir = Path(__file__).parent
-    env = Environment(loader=FileSystemLoader(template_dir))
-    template = env.get_template("report_template.html")
-
-    html_content = template.render(
-        model_name=model_name,
-        timestamp=timestamp,
-        input_csv=input_csv,
-        input_file=input_file,
-        total=total,
-        passed=passed,
-        type_check_pass=type_check_pass,
-        compiles=compiles,
-        tests_pass=tests_pass,
-        pass_rate=pass_rate,
-        type_check_rate=type_check_rate,
-        compile_rate=compile_rate,
-        test_pass_rate=test_pass_rate,
-        avg_reward=avg_reward,
-        avg_gen_time=avg_gen_time,
-        total_gen_time=total_gen_time,
-        failure_stages_sorted=failure_stages_sorted,
-        failure_data=failure_data,
-        difficulty_data=difficulty_data,
-    )
-
-    report_path = run_dir / "report.html"
-    with open(report_path, "w", encoding="utf-8") as f:
-        f.write(html_content)
 
 
 def main():
