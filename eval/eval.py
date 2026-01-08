@@ -2,8 +2,9 @@
 """
 Evaluation script for OCaml code generation using a local LLM.
 
-Reads problems from a CSV file, generates solutions via llama-server API,
-evaluates them using the training reward system, and outputs metrics to CSV.
+Reads problems from a HuggingFace dataset, generates solutions via OpenAI-compatible API
+(vLLM, llama.cpp, etc.), evaluates them using the training reward system, and outputs
+metrics to CSV.
 """
 
 import csv
@@ -15,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import requests
+from datasets import load_dataset
 
 from .constants import FAILURE_STAGE_PATTERNS, PASS_THRESHOLD
 from .metrics import compute_failure_stages
@@ -24,21 +26,21 @@ from environment import prepend_signature
 from reward import _score_completion_vf
 
 # Configuration via environment variables
-LLAMA_URL = os.environ.get("LLAMA_URL", "http://localhost:8080/v1/chat/completions")
-LLAMA_MODEL = os.environ.get("LLAMA_MODEL", "local-model")
-INPUT_CSV = os.environ.get("INPUT_CSV", "promptfoo/tests/ocaml_tests_sample.csv")
+OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "http://localhost:8080/v1/chat/completions")
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "local-model")
+INPUT_DATASET = os.environ.get("INPUT_DATASET", "kiranpg/ocaml-eval-problems")
 
 SYSTEM_PROMPT = "Respond only with runnable OCaml code (no prose)."
 
 PROMPT_TEMPLATE = """You are an expert OCaml engineer. Complete the following OCaml function.
-Respond only with the function implementation (no prose, no markdown).
+Respond only with the function implementation (no prose).
 
 {problem_text}"""
 
 
-def call_llama(prompt: str) -> str:
+def call_openai_api(prompt: str) -> str:
     """
-    Call the llama-server API with an OpenAI-compatible request.
+    Call an OpenAI-compatible API (vLLM, llama.cpp, etc.).
 
     Args:
         prompt: The user prompt to send
@@ -51,7 +53,7 @@ def call_llama(prompt: str) -> str:
         ValueError: On unexpected response format
     """
     payload = {
-        "model": LLAMA_MODEL,
+        "model": OPENAI_MODEL,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": prompt},
@@ -59,7 +61,7 @@ def call_llama(prompt: str) -> str:
         "stream": False,
     }
 
-    response = requests.post(LLAMA_URL, json=payload, timeout=300)
+    response = requests.post(OPENAI_BASE_URL, json=payload, timeout=300)
     response.raise_for_status()
     data = response.json()
 
@@ -86,7 +88,7 @@ def generate_solution(problem_text: str) -> tuple[str, float]:
     prompt = PROMPT_TEMPLATE.format(problem_text=problem_text.strip())
 
     start_time = time.perf_counter()
-    completion = call_llama(prompt)
+    completion = call_openai_api(prompt)
     generation_time = time.perf_counter() - start_time
 
     return completion, generation_time
@@ -128,10 +130,10 @@ def evaluate_solution(pid: str, completion: str, tests: str) -> dict[str, Any]:
     return _score_completion_vf(pid, completion, tests)
 
 
-def read_problems(input_path: str) -> list[dict[str, Any]]:
-    """Read problems from CSV file."""
-    with open(input_path, "r", encoding="utf-8") as f:
-        return list(csv.DictReader(f))
+def read_problems(dataset_id: str) -> list[dict[str, Any]]:
+    """Read problems from HuggingFace dataset."""
+    dataset = load_dataset(dataset_id, split="train")
+    return [dict(row) for row in dataset]
 
 
 def _base_scores(eval_result: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -195,7 +197,7 @@ def build_completion(
         "generation_time_sec": round(generation_time, 2),
         "completion_length": len(completion),
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "model": LLAMA_MODEL,
+        "model": OPENAI_MODEL,
     }
     if error:
         result["error"] = error
@@ -238,9 +240,11 @@ def print_problem_status(i: int, total: int, pid: str, result: dict[str, Any]) -
         print(f"FAIL (reward={result['total_reward']:.2f}, stage={result['failure_stage']})")
 
 
-def process_csv(input_path: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Process all problems in the CSV file and return (results, completions)."""
-    problems = read_problems(input_path)
+def process_dataset(dataset_id: str, limit: int = 0) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Process all problems in the dataset and return (results, completions)."""
+    problems = read_problems(dataset_id)
+    if limit > 0:
+        problems = problems[:limit]
     results = []
     completions = []
 
@@ -303,8 +307,13 @@ def print_summary(results: list[dict[str, Any]]) -> None:
 
 def main():
     """Main entry point."""
+    import argparse
+    parser = argparse.ArgumentParser(description="Evaluate OCaml code generation")
+    parser.add_argument("--limit", type=int, default=0, help="Limit number of problems (0=all)")
+    args = parser.parse_args()
+
     # Generate output directory with model name and timestamp
-    model_name = LLAMA_MODEL.replace("/", "_").replace(":", "_")
+    model_name = OPENAI_MODEL.replace("/", "_").replace(":", "_")
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = Path(f"eval_runs/{model_name}_{timestamp}")
 
@@ -314,18 +323,20 @@ def main():
     results_path = run_dir / "results.csv"
     completions_path = run_dir / "completions.jsonl"
 
-    print(f"Input: {INPUT_CSV}")
-    print(f"Model: {LLAMA_MODEL}")
-    print(f"API URL: {LLAMA_URL}")
+    print(f"Dataset: {INPUT_DATASET}")
+    print(f"Model: {OPENAI_MODEL}")
+    print(f"API URL: {OPENAI_BASE_URL}")
     print(f"Output directory: {run_dir}")
+    if args.limit > 0:
+        print(f"Limit: {args.limit} problems")
     print("-" * 50)
 
-    results, completions = process_csv(INPUT_CSV)
+    results, completions = process_dataset(INPUT_DATASET, limit=args.limit)
     write_results(results, str(results_path))
     write_completions(completions, str(completions_path))
-    generate_html_report(results, run_dir, LLAMA_MODEL, INPUT_CSV)
+    generate_html_report(results, run_dir, OPENAI_MODEL, INPUT_DATASET)
 
-    print(f"\nResults written to:")
+    print("\nResults written to:")
     print(f"  CSV: {results_path}")
     print(f"  Completions: {completions_path}")
     print(f"  Report: {run_dir / 'report.html'}")

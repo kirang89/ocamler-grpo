@@ -176,9 +176,15 @@ def main() -> None:
     use_bf16 = cuda_available and torch.cuda.is_bf16_supported()
     use_fp16 = not use_bf16 and cuda_available
 
-    # Load dataset first to determine if we have eval set
-    print(f"Loading dataset from {dataset_id}...")
-    train_dataset, eval_dataset = load_hf_dataset(dataset_id, eval_split=eval_split)
+    # Load tokenizer FIRST - needed for chat template formatting
+    print("Loading tokenizer...")
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    print(f"  chat_template: {'yes' if tokenizer.chat_template else 'no'}")
+
+    # Load dataset with chat template formatting
+    print(f"\nLoading dataset from {dataset_id}...")
+    print("  Applying chat template formatting...")
+    train_dataset, eval_dataset = load_hf_dataset(dataset_id, tokenizer, eval_split)
     has_eval = eval_dataset is not None
     print(f"  Train: {len(train_dataset)} examples")
     if has_eval:
@@ -212,18 +218,9 @@ def main() -> None:
     output_path = Path(sft_config.output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    # Load tokenizer
-    print("Loading tokenizer...")
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    tokenizer.padding_side = "right"
-    print(f"  pad_token: {tokenizer.pad_token}")
-    print(f"  padding_side: {tokenizer.padding_side}")
-
     # Create SFTTrainer
-    # Uses prompt-completion dataset format for automatic prompt masking
-    # (completion_only_loss=True by default in SFTConfig)
+    # Uses pre-formatted 'text' column with chat template applied
+    # This ensures training format matches inference format exactly
     print(f"Loading model {model_id} with LoRA...")
     trainer = SFTTrainer(
         model=model_id,
@@ -248,7 +245,7 @@ def main() -> None:
     print(f"  Logs:    {output_path}/metrics.log")
     trainer.train(resume_from_checkpoint=last_checkpoint)
 
-    print(f"\nTraining complete!")
+    print("\nTraining complete!")
     print(f"  Checkpoints: {output_path}/checkpoint-*/")
     print(f"  Metrics: {output_path}/metrics.jsonl")
 
