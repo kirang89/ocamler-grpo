@@ -48,7 +48,7 @@ def log_reward_entries(
 
 def log_learning_metrics(log_path: Path, metrics: Dict) -> None:
     """
-    Logs essential learning metrics to a dedicated file for easy monitoring.
+    Logs essential learning metrics as JSON lines to a dedicated file for easy monitoring.
 
     Args:
         log_path: Path to the learning.log file
@@ -81,52 +81,36 @@ def log_learning_metrics(log_path: Path, metrics: Dict) -> None:
     # Ensure parent directory exists
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Initialize file with header if it doesn't exist
-    if not log_path.exists():
-        with log_path.open("w", encoding="utf-8") as f:
-            f.write("=" * 80 + "\n")
-            f.write("GRPO Training - Learning Metrics Log\n")
-            f.write("=" * 80 + "\n\n")
+    # Build JSON structure with cleaner field names
+    log_entry = {}
 
-    # Format and write log entry
+    if "epoch" in filtered_metrics:
+        log_entry["epoch"] = filtered_metrics["epoch"]
+    if "loss" in filtered_metrics:
+        log_entry["loss"] = filtered_metrics["loss"]
+    if "grad_norm" in filtered_metrics:
+        log_entry["grad_norm"] = filtered_metrics["grad_norm"]
+    if "learning_rate" in filtered_metrics:
+        log_entry["learning_rate"] = filtered_metrics["learning_rate"]
+    if "reward" in filtered_metrics:
+        log_entry["reward_mean"] = filtered_metrics["reward"]
+    if "reward_std" in filtered_metrics:
+        log_entry["reward_std"] = filtered_metrics["reward_std"]
+    if "rewards/syntax_aware_reward/mean" in filtered_metrics:
+        log_entry["syntax_reward_mean"] = filtered_metrics["rewards/syntax_aware_reward/mean"]
+    if "rewards/syntax_aware_reward/std" in filtered_metrics:
+        log_entry["syntax_reward_std"] = filtered_metrics["rewards/syntax_aware_reward/std"]
+    if "entropy" in filtered_metrics:
+        log_entry["entropy"] = filtered_metrics["entropy"]
+    if "frac_reward_zero_std" in filtered_metrics:
+        log_entry["frac_reward_zero_std"] = filtered_metrics["frac_reward_zero_std"]
+    if "step_time" in filtered_metrics:
+        log_entry["step_time"] = filtered_metrics["step_time"]
+    if "completions/mean_length" in filtered_metrics:
+        log_entry["mean_length"] = filtered_metrics["completions/mean_length"]
+    if "kl" in filtered_metrics:
+        log_entry["kl"] = filtered_metrics["kl"]
+
+    # Write as single-line JSON
     with log_path.open("a", encoding="utf-8") as f:
-        # Epoch indicator
-        epoch = filtered_metrics.get("epoch", "?")
-        f.write(f"[Epoch {epoch:.2f}]")
-
-        # Core training metrics
-        if "loss" in filtered_metrics:
-            f.write(f"  loss={filtered_metrics['loss']:.4f}")
-        if "grad_norm" in filtered_metrics:
-            f.write(f"  grad={filtered_metrics['grad_norm']:.4f}")
-        if "learning_rate" in filtered_metrics:
-            f.write(f"  lr={filtered_metrics['learning_rate']:.2e}")
-
-        # Reward metrics
-        if "reward" in filtered_metrics:
-            reward = filtered_metrics["reward"]
-            reward_std = filtered_metrics.get("reward_std", 0)
-            f.write(f"  reward={reward:.3f}±{reward_std:.3f}")
-
-        if "rewards/syntax_aware_reward/mean" in filtered_metrics:
-            rew_mean = filtered_metrics["rewards/syntax_aware_reward/mean"]
-            rew_std = filtered_metrics.get("rewards/syntax_aware_reward/std", 0)
-            f.write(f"  syntax_rew={rew_mean:.3f}±{rew_std:.3f}")
-
-        # Policy health metrics
-        if "entropy" in filtered_metrics:
-            f.write(f"  entropy={filtered_metrics['entropy']:.3f}")
-        if "frac_reward_zero_std" in filtered_metrics:
-            f.write(f"  frac_zero_std={filtered_metrics['frac_reward_zero_std']:.2f}")
-
-        # Step timing metrics
-        if "step_time" in filtered_metrics:
-            f.write(f"  step_time={filtered_metrics['step_time']:.3f}s")
-
-        # Completion metrics
-        if "completions/mean_length" in filtered_metrics:
-            f.write(f"  mean_len={filtered_metrics['completions/mean_length']:.1f}")
-        if "kl" in filtered_metrics:
-            f.write(f"  kl={filtered_metrics['kl']:.4f}")
-
-        f.write("\n")
+        f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")

@@ -127,24 +127,9 @@ def get_training_params():
 
 def parse_log_file(log_path):
     """
-    Parse learning.log, keeping only complete rows (with reward data).
+    Parse learning.log (JSON lines format), keeping only complete rows (with reward data).
     Aggregate all metrics per epoch using mean.
     """
-    # Regex for complete rows only (must have reward field)
-    pattern = re.compile(
-        r"\[Epoch (\d+\.\d+)\]\s+"
-        r"loss=([^\s]+)\s+"
-        r"grad=([^\s]+)\s+"
-        r"lr=([^\s]+)\s+"
-        r"reward=([^±]+)±([^\s]+)\s+"
-        r"syntax_rew=([^±]+)±([^\s]+)\s+"
-        r"entropy=([^\s]+)\s+"
-        r"frac_zero_std=([^\s]+)"
-        r"(?:\s+step_time=([^\s]+)s)?"  # Optional step_time (group 11)
-        r"(?:\s+mean_len=([^\s]+))?"    # Optional mean_length (group 12)
-        r"(?:\s+kl=([^\s]+))?"          # Optional kl (group 13)
-    )
-
     # Collect all values per epoch
     epoch_data = defaultdict(
         lambda: {
@@ -166,30 +151,49 @@ def parse_log_file(log_path):
     try:
         with open(log_path, "r") as f:
             for line in f:
-                match = pattern.match(line.strip())
-                if match:
-                    epoch = float(match.group(1))
-                    epoch_data[epoch]["loss"].append(float(match.group(2)))
-                    epoch_data[epoch]["grad"].append(float(match.group(3)))
-                    epoch_data[epoch]["lr"].append(float(match.group(4)))
-                    epoch_data[epoch]["reward_mean"].append(float(match.group(5)))
-                    epoch_data[epoch]["reward_std"].append(float(match.group(6)))
-                    epoch_data[epoch]["syntax_reward_mean"].append(float(match.group(7)))
-                    epoch_data[epoch]["syntax_reward_std"].append(float(match.group(8)))
-                    epoch_data[epoch]["entropy"].append(float(match.group(9)))
-                    epoch_data[epoch]["frac_zero_std"].append(float(match.group(10)))
-                    # Extract step_time if present (group 11)
-                    step_time_str = match.group(11)
-                    if step_time_str:
-                        epoch_data[epoch]["step_time"].append(float(step_time_str))
-                    # Extract mean_length if present (group 12)
-                    mean_len_str = match.group(12)
-                    if mean_len_str:
-                        epoch_data[epoch]["mean_length"].append(float(mean_len_str))
-                    # Extract kl if present (group 13)
-                    kl_str = match.group(13)
-                    if kl_str:
-                        epoch_data[epoch]["kl"].append(float(kl_str))
+                line = line.strip()
+                if not line:
+                    continue
+
+                try:
+                    entry = json.loads(line)
+
+                    # Skip entries without epoch or reward data
+                    if "epoch" not in entry or "reward_mean" not in entry:
+                        continue
+
+                    epoch = float(entry["epoch"])
+
+                    # Collect metrics for this epoch
+                    if "loss" in entry:
+                        epoch_data[epoch]["loss"].append(float(entry["loss"]))
+                    if "grad_norm" in entry:
+                        epoch_data[epoch]["grad"].append(float(entry["grad_norm"]))
+                    if "learning_rate" in entry:
+                        epoch_data[epoch]["lr"].append(float(entry["learning_rate"]))
+                    if "reward_mean" in entry:
+                        epoch_data[epoch]["reward_mean"].append(float(entry["reward_mean"]))
+                    if "reward_std" in entry:
+                        epoch_data[epoch]["reward_std"].append(float(entry["reward_std"]))
+                    if "syntax_reward_mean" in entry:
+                        epoch_data[epoch]["syntax_reward_mean"].append(float(entry["syntax_reward_mean"]))
+                    if "syntax_reward_std" in entry:
+                        epoch_data[epoch]["syntax_reward_std"].append(float(entry["syntax_reward_std"]))
+                    if "entropy" in entry:
+                        epoch_data[epoch]["entropy"].append(float(entry["entropy"]))
+                    if "frac_reward_zero_std" in entry:
+                        epoch_data[epoch]["frac_zero_std"].append(float(entry["frac_reward_zero_std"]))
+                    if "step_time" in entry:
+                        epoch_data[epoch]["step_time"].append(float(entry["step_time"]))
+                    if "mean_length" in entry:
+                        epoch_data[epoch]["mean_length"].append(float(entry["mean_length"]))
+                    if "kl" in entry:
+                        epoch_data[epoch]["kl"].append(float(entry["kl"]))
+
+                except json.JSONDecodeError:
+                    # Skip malformed JSON lines
+                    continue
+
     except FileNotFoundError:
         print(f"Warning: Log file {log_path} not found.")
         return {"epochs": [], "error": "Log file not found"}
