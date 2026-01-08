@@ -1,3 +1,11 @@
+"""Logging utilities for RLVR/GRPO training.
+
+This module provides:
+- RewardLogger class for batch reward logging
+- log_reward_entries() helper function
+- log_learning_metrics() for training progress logging
+"""
+
 import json
 from pathlib import Path
 from typing import Any, Dict, List

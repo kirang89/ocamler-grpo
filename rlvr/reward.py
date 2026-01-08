@@ -17,22 +17,21 @@ import os
 import tempfile
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List
 
-from environment import (
+from rlvr.environment import (
     MIN_NON_EMPTY_LINES,
     RewardResult,
     compile_reward,
     compute_solution_style_penalty,
     count_non_empty_code_lines,
     extract_code_block,
-    extract_function_signature,
     is_degenerate_output,
     prepend_signature,
     tests_reward,
     type_check_reward,
 )
-from logger import RewardLogger
+from rlvr.logging import RewardLogger
 
 # Default pool size for parallel reward computation
 DEFAULT_REWARD_POOL_SIZE = 4
@@ -343,4 +342,4 @@ def _build_completion_log_entry(
 
 
 # Export main function
-__all__ = ["build_reward_functions_vf"]
+__all__ = ["build_reward_functions_vf", "_score_completion_vf"]
