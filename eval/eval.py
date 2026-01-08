@@ -32,8 +32,8 @@ INPUT_DATASET = os.environ.get("INPUT_DATASET", "kiranpg/ocaml-eval-problems")
 
 SYSTEM_PROMPT = "Respond only with runnable OCaml code (no prose)."
 
-PROMPT_TEMPLATE = """You are an expert OCaml engineer. Complete the following OCaml function.
-Respond only with the function implementation (no prose).
+PROMPT_TEMPLATE = """You are an expert OCaml programmer. Complete the following OCaml function.
+Respond with ONLY the function body wrapped in an ```ocaml``` code block.
 
 {problem_text}"""
 
