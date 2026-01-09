@@ -22,7 +22,7 @@ dependencies = [
 [project.optional-dependencies]
 cuda = [
     "bitsandbytes>=0.45.0",
-    "vllm>=0.1.2"
+    "vllm>=0.1.2; sys_platform == 'linux'"
 ]
 
 [[tool.uv.index]]
