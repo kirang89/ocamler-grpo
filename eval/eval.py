@@ -22,7 +22,7 @@ from .constants import FAILURE_STAGE_PATTERNS, PASS_THRESHOLD
 from .metrics import compute_failure_stages
 from .report import generate_html_report
 
-from rlvr.environment import prepend_signature
+from rlvr.environment import extract_code_block, prepend_signature
 from rlvr.reward import _score_completion_vf
 
 # Configuration via environment variables
@@ -219,7 +219,9 @@ def process_single_problem(problem: dict[str, Any]) -> tuple[dict[str, Any], dic
             build_completion(pid, difficulty, problem_text, tests, None, error=str(exc)),
         )
 
-    full_completion = prepend_signature(problem_text, completion)
+    # Extract code from markdown blocks first, then prepend signature
+    code = extract_code_block(completion)
+    full_completion = prepend_signature(problem_text, code)
     eval_result = evaluate_solution(pid, full_completion, tests)
 
     return (
