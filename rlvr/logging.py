@@ -54,87 +54,66 @@ def log_reward_entries(
     logger.log(reward_name, entries)
 
 
-def log_learning_metrics(log_path: Path, metrics: Dict) -> None:
-    """
-    Logs essential learning metrics to a dedicated file for easy monitoring.
+# Keys that pass through unchanged from TRL trainer to JSONL
+_DIRECT_KEYS = ["epoch", "loss", "grad_norm", "learning_rate", "entropy", "step_time", "kl"]
 
-    Args:
-        log_path: Path to the learning.log file
-        metrics: Dictionary of training metrics from trainer logs
-    """
-    # Essential metrics to track
-    essential_keys = [
-        "epoch",
-        "loss",
-        "grad_norm",
-        "learning_rate",
-        "reward",
-        "reward_std",
-        "rewards/syntax_aware_reward/mean",
-        "rewards/syntax_aware_reward/std",
-        "entropy",
-        "frac_reward_zero_std",
-        "step_time",
-        "completions/mean_length",
-        "kl",
-    ]
+# Keys that need renaming: TRL trainer key → JSONL key
+_RENAMED_KEYS = {
+    "reward": "reward_mean",
+    "reward_std": "reward_std",
+    "rewards/syntax_aware_reward/mean": "syntax_reward_mean",
+    "rewards/syntax_aware_reward/std": "syntax_reward_std",
+    "frac_reward_zero_std": "frac_zero_std",
+    "completions/mean_length": "mean_length",
+}
 
-    # Extract available metrics
-    filtered_metrics = {k: v for k, v in metrics.items() if k in essential_keys}
+# All keys we track (for filtering)
+_ESSENTIAL_KEYS = set(_DIRECT_KEYS) | set(_RENAMED_KEYS.keys())
+
+
+def format_grpo_metrics_jsonl(metrics: Dict) -> dict | None:
+    """
+    Format GRPO training metrics as a JSONL record. Pure function.
+
+    Returns None if there are insufficient metrics to log.
+    """
+    # Extract only the metrics we care about
+    filtered = {k: v for k, v in metrics.items() if k in _ESSENTIAL_KEYS}
 
     # Only log if we have meaningful metrics (skip if only epoch or empty)
-    if len(filtered_metrics) <= 1:
+    if len(filtered) <= 1:
+        return None
+
+    record: Dict[str, Any] = {}
+
+    # Direct keys pass through unchanged
+    for key in _DIRECT_KEYS:
+        if key in filtered:
+            record[key] = filtered[key]
+
+    # Renamed keys get mapped to their JSONL names
+    for src, dst in _RENAMED_KEYS.items():
+        if src in filtered:
+            record[dst] = filtered[src]
+
+    return record
+
+
+def log_learning_metrics(log_path: Path, metrics: Dict) -> None:
+    """
+    Logs essential learning metrics to a JSONL file for easy monitoring.
+
+    Args:
+        log_path: Path to the metrics.jsonl file
+        metrics: Dictionary of training metrics from trainer logs
+    """
+    record = format_grpo_metrics_jsonl(metrics)
+    if record is None:
         return
 
     # Ensure parent directory exists
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Initialize file with header if it doesn't exist
-    if not log_path.exists():
-        with log_path.open("w", encoding="utf-8") as f:
-            f.write("=" * 80 + "\n")
-            f.write("GRPO Training - Learning Metrics Log\n")
-            f.write("=" * 80 + "\n\n")
-
-    # Format and write log entry
+    # Append JSON record
     with log_path.open("a", encoding="utf-8") as f:
-        # Epoch indicator
-        epoch = filtered_metrics.get("epoch", "?")
-        f.write(f"[Epoch {epoch:.2f}]")
-
-        # Core training metrics
-        if "loss" in filtered_metrics:
-            f.write(f"  loss={filtered_metrics['loss']:.4f}")
-        if "grad_norm" in filtered_metrics:
-            f.write(f"  grad={filtered_metrics['grad_norm']:.4f}")
-        if "learning_rate" in filtered_metrics:
-            f.write(f"  lr={filtered_metrics['learning_rate']:.2e}")
-
-        # Reward metrics
-        if "reward" in filtered_metrics:
-            reward = filtered_metrics["reward"]
-            reward_std = filtered_metrics.get("reward_std", 0)
-            f.write(f"  reward={reward:.3f}±{reward_std:.3f}")
-
-        if "rewards/syntax_aware_reward/mean" in filtered_metrics:
-            rew_mean = filtered_metrics["rewards/syntax_aware_reward/mean"]
-            rew_std = filtered_metrics.get("rewards/syntax_aware_reward/std", 0)
-            f.write(f"  syntax_rew={rew_mean:.3f}±{rew_std:.3f}")
-
-        # Policy health metrics
-        if "entropy" in filtered_metrics:
-            f.write(f"  entropy={filtered_metrics['entropy']:.3f}")
-        if "frac_reward_zero_std" in filtered_metrics:
-            f.write(f"  frac_zero_std={filtered_metrics['frac_reward_zero_std']:.2f}")
-
-        # Step timing metrics
-        if "step_time" in filtered_metrics:
-            f.write(f"  step_time={filtered_metrics['step_time']:.3f}s")
-
-        # Completion metrics
-        if "completions/mean_length" in filtered_metrics:
-            f.write(f"  mean_len={filtered_metrics['completions/mean_length']:.1f}")
-        if "kl" in filtered_metrics:
-            f.write(f"  kl={filtered_metrics['kl']:.4f}")
-
-        f.write("\n")
+        f.write(json.dumps(record) + "\n")
