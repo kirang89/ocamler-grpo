@@ -4,7 +4,7 @@ import subprocess
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Callable, Dict, Tuple
 
 import verifiers as vf
 from datasets import Dataset, load_dataset
@@ -37,6 +37,12 @@ TYPE_ERROR_SCORE_MAP = {
     8: 0.02,
     9: 0.015,
 }
+
+# Reward score constants
+TYPE_CHECK_MAX_SCORE = 0.25
+COMPILE_SUCCESS_SCORE = 0.10
+TESTS_PASS_SCORE = 0.65
+STYLE_PENALTY_MAX = 0.10
 
 
 @dataclass
@@ -245,7 +251,7 @@ def type_check_reward(source_path: Path, workdir: Path) -> RewardResult:
 
     # Check passed
     return RewardResult(
-        score=0.25,
+        score=TYPE_CHECK_MAX_SCORE,
         metadata={
             "syntax_errors": 0,
             "error_details": "success",
@@ -297,9 +303,9 @@ def compile_reward(
 
     # Compilation succeeded
     if result.returncode == 0:
-        return RewardResult(score=0.10, metadata={"timed_out": False})
+        return RewardResult(score=COMPILE_SUCCESS_SCORE, metadata={"timed_out": False})
     # Perfect type check but compilation failed (linking issues, etc.)
-    elif type_check.score == 0.25:
+    elif type_check.score == TYPE_CHECK_MAX_SCORE:
         return RewardResult(score=0.05, metadata={"timed_out": False})
     # Syntax errors get no credit
     elif type_check.metadata.get("has_syntax_error"):
@@ -333,7 +339,7 @@ def tests_reward(workdir: Path, executable_name: str) -> RewardResult:
             timeout=TEST_TIMEOUT,
         )
         return RewardResult(
-            score=0.65 if result.returncode == 0 else 0.0,
+            score=TESTS_PASS_SCORE if result.returncode == 0 else 0.0,
             metadata={"timed_out": False},
         )
     except subprocess.TimeoutExpired:
@@ -472,8 +478,8 @@ def compute_solution_style_penalty(completion: str, code: str) -> tuple[float, l
             penalty += 0.03
             reasons.append("trailing prose")
 
-    # Cap total penalty at 0.10
-    penalty = min(penalty, 0.10)
+    # Cap total penalty
+    penalty = min(penalty, STYLE_PENALTY_MAX)
 
     return penalty, reasons
 
@@ -483,15 +489,136 @@ def compute_solution_style_penalty(completion: str, code: str) -> tuple[float, l
 # ============================================================================
 
 
-def ocaml_reward(completion: str, info: Dict[str, Any], state: Dict[str, Any]) -> float:
+def _prepare_code_for_evaluation(
+    completion: str, info: Dict[str, Any], state: Dict[str, Any]
+) -> tuple[str, str, str, str]:
     """
-    Main verifiers rubric function for OCaml code generation.
+    Extract and prepare code for evaluation.
+
+    Returns:
+        Tuple of (problem_id, code, tests, combined_code).
+        Returns (problem_id, "", "", "") if code is invalid.
+    """
+    problem_id = info.get("problem_id") or state.get("problem_id", "unknown")
+    tests = info.get("tests", "")
+
+    code = extract_code_block(completion)
+    if not code or count_non_empty_code_lines(code) < MIN_NON_EMPTY_LINES:
+        return problem_id, "", "", ""
+
+    combined_code = f"{code.rstrip()}\n\n{tests.strip()}\n"
+    return problem_id, code, tests, combined_code
+
+
+def type_check_rubric(completion: str, info: Dict[str, Any], state: Dict[str, Any]) -> float:
+    """
+    Verifiers-compatible type check reward function.
+
+    Runs OCaml type checking on the completion and returns graduated score.
+    Score range: 0.0 to 0.25
+
+    Args:
+        completion: Model's completion text
+        info: Dictionary with "tests" and "problem_id"
+        state: Dictionary (unused, for verifiers compatibility)
+
+    Returns:
+        Float reward: 0.25 for no errors, graduated down for errors, 0 for syntax errors
+    """
+    problem_id, code, tests, combined_code = _prepare_code_for_evaluation(completion, info, state)
+    if not code:
+        return 0.0
+
+    with tempfile.TemporaryDirectory(prefix=f"{problem_id}_typecheck_") as tmpdir_str:
+        tmpdir = Path(tmpdir_str)
+        source_path = tmpdir / f"{problem_id}.ml"
+        source_path.write_text(combined_code, encoding="utf-8")
+
+        result = type_check_reward(source_path, tmpdir)
+
+    return float(result.score)
+
+
+def compile_rubric(completion: str, info: Dict[str, Any], state: Dict[str, Any]) -> float:
+    """
+    Verifiers-compatible compilation reward function.
+
+    Runs OCaml type check and compilation, returns score based on success and type check state.
+    Score range: 0.0 to 0.10
+
+    Args:
+        completion: Model's completion text
+        info: Dictionary with "tests" and "problem_id"
+        state: Dictionary (unused, for verifiers compatibility)
+
+    Returns:
+        Float reward: 0.10 for successful compile, partial credit otherwise
+    """
+    problem_id, code, tests, combined_code = _prepare_code_for_evaluation(completion, info, state)
+    if not code:
+        return 0.0
+
+    with tempfile.TemporaryDirectory(prefix=f"{problem_id}_compile_") as tmpdir_str:
+        tmpdir = Path(tmpdir_str)
+        source_path = tmpdir / f"{problem_id}.ml"
+        source_path.write_text(combined_code, encoding="utf-8")
+
+        # Need type check result for partial credit logic
+        type_check_result = type_check_reward(source_path, tmpdir)
+        result = compile_reward(source_path, tmpdir, problem_id, type_check_result)
+
+    return float(result.score)
+
+
+def tests_rubric(completion: str, info: Dict[str, Any], state: Dict[str, Any]) -> float:
+    """
+    Verifiers-compatible test execution reward function.
+
+    Runs full pipeline (type check, compile, tests) and returns test score.
+    Score range: 0.0 to 0.65
+
+    Args:
+        completion: Model's completion text
+        info: Dictionary with "tests" and "problem_id"
+        state: Dictionary (unused, for verifiers compatibility)
+
+    Returns:
+        Float reward: 0.65 if tests pass, 0.0 otherwise
+    """
+    problem_id, code, tests, combined_code = _prepare_code_for_evaluation(completion, info, state)
+    if not code:
+        return 0.0
+
+    with tempfile.TemporaryDirectory(prefix=f"{problem_id}_tests_") as tmpdir_str:
+        tmpdir = Path(tmpdir_str)
+        source_path = tmpdir / f"{problem_id}.ml"
+        source_path.write_text(combined_code, encoding="utf-8")
+
+        # Run full pipeline
+        type_check_result = type_check_reward(source_path, tmpdir)
+        compile_result = compile_reward(source_path, tmpdir, problem_id, type_check_result)
+
+        # Only run tests if compilation succeeded
+        if compile_result.score == COMPILE_SUCCESS_SCORE:
+            result = tests_reward(tmpdir, problem_id)
+        else:
+            result = RewardResult(0.0)
+
+    return float(result.score)
+
+
+def ocaml_reward_with_metadata(
+    completion: str, info: Dict[str, Any], state: Dict[str, Any]
+) -> Tuple[float, Dict[str, Any]]:
+    """
+    Main verifiers rubric function for OCaml code generation with full metadata.
 
     Implements a graduated reward structure:
     - Type checking: 25% (graduated partial credit for type errors)
     - Compilation: 10% (partial credit based on type check)
     - Tests: 65% (full reward for passing tests)
     - Prose penalty: 0.3x multiplier if degenerate output detected
+    - Style penalty: up to 0.10 for passing solutions with style issues
 
     Args:
         completion: Model's completion text
@@ -501,7 +628,9 @@ def ocaml_reward(completion: str, info: Dict[str, Any], state: Dict[str, Any]) -
                Expected keys: "problem_id" (str)
 
     Returns:
-        Float reward in range [0, 1]
+        Tuple of (score, metadata_dict) where:
+        - score: Float reward in range [0, 1]
+        - metadata_dict: Dictionary with detailed scoring breakdown
     """
     # Extract problem metadata
     problem_id = info.get("problem_id") or state.get("problem_id", "unknown")
@@ -510,7 +639,23 @@ def ocaml_reward(completion: str, info: Dict[str, Any], state: Dict[str, Any]) -
     # Extract and validate code
     code = extract_code_block(completion)
     if not code or count_non_empty_code_lines(code) < MIN_NON_EMPTY_LINES:
-        return 0.0
+        return 0.0, {
+            "problem_id": problem_id,
+            "total_reward": 0.0,
+            "base_reward": 0.0,
+            "type_score": 0.0,
+            "compile_score": 0.0,
+            "test_score": 0.0,
+            "syntax_errors": None,
+            "error_details": None,
+            "is_degenerate": False,
+            "degenerate_reasons": [],
+            "style_penalty": 0.0,
+            "style_reasons": [],
+            "reason": "empty or too short",
+            "timeout_stage": None,
+            "passed": False,
+        }
 
     # Combine solution with test code
     combined_code = f"{code.rstrip()}\n\n{tests.strip()}\n"
@@ -525,17 +670,86 @@ def ocaml_reward(completion: str, info: Dict[str, Any], state: Dict[str, Any]) -
         compile_result = compile_reward(source_path, tmpdir, problem_id, type_check_result)
 
         # Only run tests if compilation succeeded
-        compile_succeeded = compile_result.score == 0.10
+        compile_succeeded = compile_result.score == COMPILE_SUCCESS_SCORE
         test_result = tests_reward(tmpdir, problem_id) if compile_succeeded else RewardResult(0.0)
+
+    # Determine timeout stage
+    timeout_stage = None
+    if type_check_result.metadata.get("timed_out"):
+        timeout_stage = "type_check"
+    elif test_result.metadata.get("timed_out"):
+        timeout_stage = "tests"
 
     # Calculate base reward
     base_reward = type_check_result.score + compile_result.score + test_result.score
 
     # Apply degenerate output penalty
-    is_degenerate, _ = is_degenerate_output(completion, code)
-    total_reward = base_reward * 0.3 if is_degenerate else base_reward
+    is_degen, degen_reasons = is_degenerate_output(completion, code)
+    total_reward = base_reward * 0.3 if is_degen else base_reward
 
-    return float(total_reward)
+    # Apply style penalty for passing solutions
+    style_penalty = 0.0
+    style_reasons = []
+    if base_reward == 1.0 and not is_degen:
+        style_penalty, style_reasons = compute_solution_style_penalty(completion, code)
+        total_reward = total_reward - style_penalty
+
+    # Build reason for reward < 1
+    reason = None
+    if total_reward < 1.0:
+        if style_reasons:
+            reason = "style: " + ", ".join(style_reasons)
+        elif degen_reasons:
+            reason = ", ".join(degen_reasons)
+        elif test_result.score == 0.0 and compile_succeeded:
+            reason = "test failure"
+        elif compile_result.score < COMPILE_SUCCESS_SCORE:
+            if type_check_result.metadata.get("has_syntax_error"):
+                reason = "syntax error"
+            elif type_check_result.score < TYPE_CHECK_MAX_SCORE:
+                reason = "type error"
+            else:
+                reason = "compile failure"
+        elif timeout_stage:
+            reason = f"timeout ({timeout_stage})"
+
+    metadata = {
+        "problem_id": problem_id,
+        "total_reward": float(total_reward),
+        "base_reward": float(base_reward),
+        "type_score": float(type_check_result.score),
+        "compile_score": float(compile_result.score),
+        "test_score": float(test_result.score),
+        "syntax_errors": type_check_result.metadata.get("syntax_errors"),
+        "error_details": type_check_result.metadata.get("error_details"),
+        "is_degenerate": is_degen,
+        "degenerate_reasons": degen_reasons,
+        "style_penalty": float(style_penalty),
+        "style_reasons": style_reasons,
+        "reason": reason,
+        "timeout_stage": timeout_stage,
+        "passed": bool(test_result.score >= TESTS_PASS_SCORE),
+    }
+
+    return float(total_reward), metadata
+
+
+def ocaml_reward(completion: str, info: Dict[str, Any], state: Dict[str, Any]) -> float:
+    """
+    Main verifiers rubric function for OCaml code generation.
+
+    Convenience wrapper around ocaml_reward_with_metadata that returns just the score.
+
+    Args:
+        completion: Model's completion text
+        info: Dictionary containing test code and problem metadata
+        state: Dictionary containing problem state
+
+    Returns:
+        Float reward in range [0, 1]
+    """
+    score, _ = ocaml_reward_with_metadata(completion, info, state)
+    return score
 
 
 # ============================================================================
@@ -622,16 +836,23 @@ __all__ = [
     "extract_function_signature",
     "prepend_signature",
     "count_non_empty_code_lines",
-    # Compilation functions
+    # Compilation functions (low-level)
     "type_check_reward",
     "compile_reward",
     "tests_reward",
+    # Verifiers-compatible rubric functions (individual components)
+    "type_check_rubric",
+    "compile_rubric",
+    "tests_rubric",
+    # Combined reward functions
+    "ocaml_reward",
+    "ocaml_reward_with_metadata",
     # Degenerate and style detection
     "is_degenerate_output",
     "compute_solution_style_penalty",
-    # Reward function
-    "ocaml_reward",
     # Dataset and environment
     "load_ocaml_dataset",
     "create_ocaml_env",
+    # Constants
+    "MIN_NON_EMPTY_LINES",
 ]

@@ -23,7 +23,7 @@ from trl import GRPOTrainer
 from rlvr.config import create_grpo_config, create_lora_config
 from rlvr.data import DEFAULT_TRAINING_DATASET, build_training_dataset, create_tokenizer
 from rlvr.logging import RewardLogger, log_learning_metrics
-from rlvr.reward import build_reward_functions_vf
+from rlvr.reward import create_reward_function
 
 
 def _ensure_cuda_driver():
@@ -88,8 +88,9 @@ def main():
     output_path.mkdir(parents=True, exist_ok=True)
 
     reward_logger = RewardLogger(output_path / "reward_logs")
-    # Use verifiers-based reward functions (migration from reward.py)
-    reward_funcs = build_reward_functions_vf(TRAINING_DATASET, reward_logger)
+
+    # Create reward function with detailed logging
+    reward_funcs = [create_reward_function(reward_logger)]
 
     config = create_grpo_config()
 

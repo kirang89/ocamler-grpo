@@ -1,294 +1,158 @@
-# reward - Adapter for using verifiers environment with trl.GRPOTrainer
+# reward.py - TRL-compatible reward function for OCaml code generation
 #
-# This module provides a bridge between the verifiers SingleTurnEnv
-# and trl's reward function interface, preserving existing logging.
+# Provides create_reward_function() which returns a reward function compatible
+# with trl.GRPOTrainer, with detailed logging for training dashboards.
 
 """
 The trl.GRPOTrainer expects reward functions with signature:
     def reward_func(prompts, completions, problem_id=None, **kwargs) -> List[float]
 
-The verifiers environment provides:
-    ocaml_reward(completion, info, state) -> float
-
-This adapter bridges the two interfaces while maintaining logging compatibility.
+This module provides create_reward_function() which creates such a function,
+using ocaml_reward_with_metadata for scoring and logging detailed breakdowns.
 """
 
 import os
-import tempfile
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from pathlib import Path
 from typing import Any, Callable, Dict, List
 
 from rlvr.environment import (
-    MIN_NON_EMPTY_LINES,
-    RewardResult,
-    compile_reward,
-    compute_solution_style_penalty,
-    count_non_empty_code_lines,
-    extract_code_block,
-    is_degenerate_output,
+    ocaml_reward_with_metadata,
     prepend_signature,
-    tests_reward,
-    type_check_reward,
 )
 from rlvr.logging import RewardLogger
 
 # Default pool size for parallel reward computation
-DEFAULT_REWARD_POOL_SIZE = 4
-
-# Default zero-reward result template
-REWARDS_ZERO: Dict[str, Any] = {
-    "total_reward": 0.0,
-    "base_reward": 0.0,
-    "type_score": 0.0,
-    "compile_score": 0.0,
-    "test_score": 0.0,
-    "syntax_errors": None,
-    "error_details": None,
-    "prose_penalty_applied": False,
-    "is_degenerate": False,
-    "degenerate_reasons": [],
-    "reason": "empty or too short",
-    "timeout_stage": None,
-    "passed": False,
-}
+DEFAULT_POOL_SIZE = 4
 
 
-def _compute_rewards_parallel(
-    completions: List[str],
-    ids: List[str],
-    tests_list: List[str],
-) -> List[Dict[str, Any]]:
+def create_reward_function(
+    logger: RewardLogger | None = None,
+    parallel: bool = True,
+    pool_size: int | None = None,
+) -> Callable:
     """
-    Score completions in parallel using a process pool.
+    Create a TRL-compatible reward function with detailed logging.
+
+    This is the main interface for creating reward functions for GRPO training.
+    It uses ocaml_reward_with_metadata for scoring and logs detailed breakdowns
+    to syntax_aware_breakdown.jsonl and completions.jsonl.
 
     Args:
-        completions: List of model completion strings
-        ids: List of problem IDs (same length as completions)
-        tests_list: List of test code strings (same length as completions)
+        logger: RewardLogger for detailed logging. If None, no logging is performed.
+        parallel: Whether to score completions in parallel (default True)
+        pool_size: Number of parallel workers (default from REWARD_POOL_SIZE env var or 4)
 
     Returns:
-        List of scoring result dictionaries from _score_completion_vf
+        Function matching TRL's (prompts, completions, **kwargs) -> List[float]
+
+    Example:
+        >>> from rlvr.reward import create_reward_function
+        >>> from rlvr.logging import RewardLogger
+        >>> logger = RewardLogger(Path("logs"))
+        >>> reward_fn = create_reward_function(logger)
+        >>> rewards = reward_fn(prompts, completions, problem_id=ids, tests=tests_list)
     """
-    args_list = [
-        (
-            ids[idx] if idx < len(ids) else f"sample_{idx}",
-            completion,
-            tests_list[idx] if idx < len(tests_list) else "",
-        )
-        for idx, completion in enumerate(completions)
-    ]
-
-    pool_size = int(os.environ.get("REWARD_POOL_SIZE", DEFAULT_REWARD_POOL_SIZE))
-    with ProcessPoolExecutor(max_workers=pool_size) as executor:
-        # Submit all tasks and track their indices to preserve order
-        future_to_index = {
-            executor.submit(_score_completion_vf, *args): idx
-            for idx, args in enumerate(args_list)
-        }
-        # Collect results as they complete (parallel) but reorder before returning
-        results = [None] * len(args_list)
-        for future in as_completed(future_to_index):
-            idx = future_to_index[future]
-            results[idx] = future.result()
-
-    return results
-
-
-def build_reward_functions_vf(dataset_id: str, logger: RewardLogger | None) -> List[Callable]:
-    """
-    Build reward functions using verifiers environment.
-
-    This replaces the original build_reward_functions() from reward.py,
-    providing the same interface but using the verifiers environment internally.
-
-    Args:
-        dataset_id: HuggingFace dataset ID or local CSV path
-        logger: Optional RewardLogger for detailed logging
-
-    Returns:
-        List containing single reward function compatible with trl.GRPOTrainer
-    """
-    return [make_syntax_aware_reward_vf(logger)]
-
-
-def make_syntax_aware_reward_vf(logger: RewardLogger | None) -> Callable:
-    """
-    Create a syntax-aware reward function using verifiers environment components.
-
-    This function maintains the same reward structure as the original but uses
-    the verifiers environment's scoring functions directly.
-
-    Args:
-        logger: Optional RewardLogger for detailed logging
-
-    Returns:
-        Reward function compatible with trl.GRPOTrainer
-    """
+    actual_pool_size = pool_size or int(os.environ.get("REWARD_POOL_SIZE", DEFAULT_POOL_SIZE))
 
     def reward_func(
         prompts: List[str],
         completions: List[str],
-        completion_ids=None,
         problem_id: List[str] | None = None,
         **kwargs,
     ) -> List[float]:
         """
-        Compute rewards for completions using verifiers environment.
+        Score completions and return rewards.
 
         Args:
-            prompts: List of prompt strings (unused but required by trl)
+            prompts: List of prompts (used for signature extraction)
             completions: List of model completions to score
-            completion_ids: Optional completion IDs (unused)
-            problem_id: List of problem IDs for logging
-            **kwargs: May contain 'tests' key with List[str] of test code
+            problem_id: Optional list of problem IDs for logging
+            **kwargs: Must include 'tests' (list of test code strings)
 
         Returns:
-            List of reward scores (floats)
+            List of float rewards, one per completion
         """
+        if not completions:
+            return []
+
         ids = problem_id or kwargs.get("problem_id") or []
         tests_list = kwargs.get("tests") or []
 
         # Combine function signatures from prompts with completions
         full_completions = [prepend_signature(p, c) for p, c in zip(prompts, completions)]
 
-        # Score all completions in parallel
-        results = _compute_rewards_parallel(full_completions, ids, tests_list)
+        # Build args for scoring
+        args_list = [
+            (
+                ids[idx] if idx < len(ids) else f"sample_{idx}",
+                full_completions[idx],
+                tests_list[idx] if idx < len(tests_list) else "",
+            )
+            for idx in range(len(full_completions))
+        ]
 
-        # Build rewards and logs from results
+        # Score completions (parallel or sequential)
+        if parallel and len(args_list) > 1:
+            results = _score_parallel(args_list, actual_pool_size)
+        else:
+            results = [_score_single(args) for args in args_list]
+
+        # Extract rewards and build logs
         rewards = []
         detailed_logs = []
         completion_logs = []
+
         for idx, result in enumerate(results):
             pid = ids[idx] if idx < len(ids) else f"sample_{idx}"
             completion = completions[idx]
+
             rewards.append(float(result["total_reward"]))
             detailed_logs.append(_build_detailed_log_entry(pid, completion, result))
             completion_logs.append(_build_completion_log_entry(pid, completion, result))
 
-        # Log results maintaining compatibility with existing dashboard
+        # Log results
         if logger:
             logger.log("syntax_aware_breakdown", detailed_logs)
             logger.log("completions", completion_logs)
 
         return rewards
 
-    reward_func.__name__ = "syntax_aware_reward"
+    reward_func.__name__ = "ocaml_reward"
     return reward_func
 
 
-def _score_completion_vf(
-    pid: str, completion: str, tests: str
-) -> Dict[str, float | str | bool | None]:
-    """
-    Score a single completion using verifiers environment scoring logic.
+def _score_single(args: tuple) -> Dict[str, Any]:
+    """Score a single completion and return full metadata."""
+    pid, completion, tests = args
+    info = {"tests": tests, "problem_id": pid}
+    _, metadata = ocaml_reward_with_metadata(completion, info, {})
 
-    This function replicates the scoring logic from ocaml_reward() but returns
-    detailed results needed for logging (individual score components).
+    # Add prose_penalty_applied for backward compatibility (same as is_degenerate)
+    metadata["prose_penalty_applied"] = metadata["is_degenerate"]
 
-    Args:
-        pid: Problem ID
-        completion: Model completion text
-        tests: Test code to append to completion
+    return metadata
 
-    Returns:
-        Dictionary containing all scoring details for logging
-    """
-    # Extract and validate code
-    code = extract_code_block(completion)
-    if not code or count_non_empty_code_lines(code) < MIN_NON_EMPTY_LINES:
-        return {"problem_id": pid, **REWARDS_ZERO}
 
-    # Combine solution with test code
-    combined_code = f"{code.rstrip()}\n\n{tests.strip()}\n"
+def _score_parallel(
+    args_list: List[tuple],
+    pool_size: int,
+) -> List[Dict[str, Any]]:
+    """Score completions in parallel using a process pool."""
+    with ProcessPoolExecutor(max_workers=pool_size) as executor:
+        future_to_idx = {
+            executor.submit(_score_single, args): idx
+            for idx, args in enumerate(args_list)
+        }
+        results = [None] * len(args_list)
+        for future in as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            results[idx] = future.result()
 
-    with tempfile.TemporaryDirectory(prefix=f"{pid}_reward_") as tmpdir_str:
-        tmpdir = Path(tmpdir_str)
-        source_path = tmpdir / f"{pid}.ml"
-        source_path.write_text(combined_code, encoding="utf-8")
-
-        # Run compilation pipeline
-        type_check = type_check_reward(source_path, tmpdir)
-        compile_result = compile_reward(source_path, tmpdir, pid, type_check)
-
-        # Only run tests if compilation succeeded
-        compile_succeeded = compile_result.score == 0.10
-        test_result = tests_reward(tmpdir, pid) if compile_succeeded else RewardResult(0.0)
-
-    # Determine timeout stage
-    timeout_stage = None
-    if type_check.metadata.get("timed_out"):
-        timeout_stage = "type_check"
-    elif test_result.metadata.get("timed_out"):
-        timeout_stage = "tests"
-
-    # Calculate base reward
-    base_reward = type_check.score + compile_result.score + test_result.score
-
-    # Apply degenerate output penalty
-    is_degenerate, degenerate_reasons = is_degenerate_output(completion, code)
-    total_reward = base_reward * 0.3 if is_degenerate else base_reward
-
-    # Apply style penalty for passing solutions (only when not degenerate)
-    style_penalty = 0.0
-    style_reasons = []
-    if base_reward == 1.0 and not is_degenerate:
-        style_penalty, style_reasons = compute_solution_style_penalty(completion, code)
-        total_reward = total_reward - style_penalty
-
-    # Build reason for reward < 1
-    reason = None
-    if total_reward < 1.0:
-        if style_reasons:
-            reason = "style: " + ", ".join(style_reasons)
-        elif degenerate_reasons:
-            reason = ", ".join(degenerate_reasons)
-        elif test_result.score == 0.0 and compile_succeeded:
-            reason = "test failure"
-        elif compile_result.score < 0.10:
-            if type_check.metadata.get("has_syntax_error"):
-                reason = "syntax error"
-            elif type_check.score < 0.25:
-                reason = "type error"
-            else:
-                reason = "compile failure"
-        elif timeout_stage:
-            reason = f"timeout ({timeout_stage})"
-
-    return {
-        "problem_id": pid,
-        "total_reward": float(total_reward),
-        "base_reward": float(base_reward),
-        "type_score": float(type_check.score),
-        "compile_score": float(compile_result.score),
-        "test_score": float(test_result.score),
-        "syntax_errors": type_check.metadata.get("syntax_errors"),
-        "error_details": type_check.metadata.get("error_details"),
-        "prose_penalty_applied": is_degenerate,
-        "is_degenerate": is_degenerate,
-        "degenerate_reasons": degenerate_reasons,
-        "style_penalty": float(style_penalty),
-        "style_reasons": style_reasons,
-        "reason": reason,
-        "timeout_stage": timeout_stage,
-        "passed": bool(test_result.score >= 0.65),
-    }
+    return results
 
 
 def _build_detailed_log_entry(pid: str, completion: str, result: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Build detailed log entry for syntax_aware_breakdown.jsonl.
-
-    This format is required for dashboard compatibility.
-
-    Args:
-        pid: Problem ID
-        completion: Model completion text
-        result: Scoring result dictionary from _score_completion_vf()
-
-    Returns:
-        Log entry dictionary
-    """
+    """Build detailed log entry for syntax_aware_breakdown.jsonl."""
     entry = {
         "problem_id": pid,
         "total_reward": float(result["total_reward"]),
@@ -304,27 +168,13 @@ def _build_detailed_log_entry(pid: str, completion: str, result: Dict[str, Any])
         "style_reasons": result.get("style_reasons", []),
         "preview": completion[:200],
     }
-    if result["timeout_stage"]:
+    if result.get("timeout_stage"):
         entry["timeout_stage"] = result["timeout_stage"]
     return entry
 
 
-def _build_completion_log_entry(
-    pid: str, completion: str, result: Dict[str, Any]
-) -> Dict[str, Any]:
-    """
-    Build completion log entry for completions.jsonl.
-
-    This format stores full completions for analysis.
-
-    Args:
-        pid: Problem ID
-        completion: Model completion text
-        result: Scoring result dictionary from _score_completion_vf()
-
-    Returns:
-        Log entry dictionary
-    """
+def _build_completion_log_entry(pid: str, completion: str, result: Dict[str, Any]) -> Dict[str, Any]:
+    """Build completion log entry for completions.jsonl."""
     entry = {
         "problem_id": pid,
         "reward": float(result["total_reward"]),
@@ -334,12 +184,14 @@ def _build_completion_log_entry(
         "style_penalty": result.get("style_penalty", 0.0),
         "completion": completion,
     }
-    if result["timeout_stage"]:
+    if result.get("timeout_stage"):
         entry["timeout_stage"] = result["timeout_stage"]
     if result.get("reason"):
         entry["reason"] = result["reason"]
     return entry
 
 
-# Export main function
-__all__ = ["build_reward_functions_vf", "_score_completion_vf"]
+# Exports
+__all__ = [
+    "create_reward_function",
+]
