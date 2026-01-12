@@ -109,8 +109,8 @@ def main():
         lora_config = create_lora_config()
 
     # Create learning metrics callback
-    learning_log_path = output_path / "learning.log"
-    learning_callback = LearningMetricsCallback(learning_log_path)
+    metrics_log_path = output_path / "metrics.jsonl"
+    learning_callback = LearningMetricsCallback(metrics_log_path)
 
     trainer = GRPOTrainer(
         model=model_id,
