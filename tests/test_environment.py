@@ -16,7 +16,7 @@ from rlvr.environment import (
     extract_code_block,
     extract_function_signature,
     is_degenerate_output,
-    ocaml_reward,
+    compute_reward,
     prepend_signature,
     tests_reward,
     type_check_reward,
@@ -533,7 +533,7 @@ class TestOCamlCompilation:
 
 @pytest.mark.skipif(not shutil.which("ocamlc"), reason="OCaml not installed")
 class TestOCamlRewardEndToEnd:
-    """End-to-end tests for ocaml_reward function."""
+    """End-to-end tests for compute_reward function."""
 
     @pytest.fixture(autouse=True)
     def clear_prose_penalty_env(self):
@@ -556,7 +556,7 @@ let sub x y = x - y
         }
         state = {"problem_id": "test_add"}
 
-        reward = ocaml_reward(completion, info, state)
+        reward = compute_reward(completion, info, state)
 
         # Should get full reward (0.25 type + 0.10 compile + 0.65 tests = 1.0)
         assert reward == 1.0
@@ -574,7 +574,7 @@ let sub x y : int = "also wrong"
         }
         state = {"problem_id": "test_type_error"}
 
-        reward = ocaml_reward(completion, info, state)
+        reward = compute_reward(completion, info, state)
 
         # Should get partial credit from type check (graduated for type errors)
         # Plus minimal compile credit (0.01)
@@ -598,7 +598,7 @@ This implementation works by adding the two numbers together."""
         }
         state = {"problem_id": "test_prose"}
 
-        reward = ocaml_reward(completion, info, state)
+        reward = compute_reward(completion, info, state)
 
         # Should get penalized to 0.3x of base reward
         # Base would be 1.0, so should be around 0.3
@@ -620,7 +620,7 @@ This implementation works by adding the two numbers together."""
         state = {"problem_id": "test_empty"}
 
         for completion in completions:
-            reward = ocaml_reward(completion, info, state)
+            reward = compute_reward(completion, info, state)
             assert reward == 0.0
 
     def test_syntax_error(self):
@@ -634,7 +634,7 @@ let add x y =
         }
         state = {"problem_id": "test_syntax"}
 
-        reward = ocaml_reward(completion, info, state)
+        reward = compute_reward(completion, info, state)
         assert reward == 0.0
 
 
@@ -647,22 +647,22 @@ class TestRewardInterface:
     """Tests for reward function interface and compatibility."""
 
     def test_reward_signature(self):
-        """Test that ocaml_reward has the correct signature."""
+        """Test that compute_reward has the correct signature."""
         import inspect
 
-        sig = inspect.signature(ocaml_reward)
+        sig = inspect.signature(compute_reward)
         params = list(sig.parameters.keys())
 
         assert params == ["completion", "info", "state"]
         assert sig.return_annotation is float or sig.return_annotation is inspect.Signature.empty
 
     def test_reward_return_type(self):
-        """Test that ocaml_reward returns a float."""
+        """Test that compute_reward returns a float."""
         completion = "let x = 1"
         info = {"tests": "", "problem_id": "test"}
         state = {"problem_id": "test"}
 
-        reward = ocaml_reward(completion, info, state)
+        reward = compute_reward(completion, info, state)
         assert isinstance(reward, float)
 
     def test_reward_range(self):
@@ -678,7 +678,7 @@ class TestRewardInterface:
         state = {"problem_id": "test"}
 
         for completion in test_cases:
-            reward = ocaml_reward(completion, info, state)
+            reward = compute_reward(completion, info, state)
             assert 0.0 <= reward <= 1.0
 
     def test_missing_problem_id(self):
@@ -688,7 +688,7 @@ class TestRewardInterface:
         state = {}
 
         # Should not crash, should use "unknown" as problem_id
-        reward = ocaml_reward(completion, info, state)
+        reward = compute_reward(completion, info, state)
         assert isinstance(reward, float)
 
     def test_missing_tests(self):
@@ -698,7 +698,7 @@ class TestRewardInterface:
         state = {"problem_id": "test"}
 
         # Should not crash, should use empty string for tests
-        reward = ocaml_reward(completion, info, state)
+        reward = compute_reward(completion, info, state)
         assert isinstance(reward, float)
 
 

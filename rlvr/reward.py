@@ -8,7 +8,7 @@ The trl.GRPOTrainer expects reward functions with signature:
     def reward_func(prompts, completions, problem_id=None, **kwargs) -> List[float]
 
 This module provides create_reward_function() which creates such a function,
-using ocaml_reward_with_metadata for scoring and logging detailed breakdowns.
+using compute_reward_with_metadata for scoring and logging detailed breakdowns.
 """
 
 import os
@@ -16,7 +16,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Any, Callable, Dict, List
 
 from rlvr.environment import (
-    ocaml_reward_with_metadata,
+    compute_reward_with_metadata,
     prepend_signature,
 )
 from rlvr.logging import RewardLogger
@@ -34,7 +34,7 @@ def create_reward_function(
     Create a TRL-compatible reward function with detailed logging.
 
     This is the main interface for creating reward functions for GRPO training.
-    It uses ocaml_reward_with_metadata for scoring and logs detailed breakdowns
+    It uses compute_reward_with_metadata for scoring and logs detailed breakdowns
     to syntax_aware_breakdown.jsonl and completions.jsonl.
 
     Args:
@@ -117,7 +117,7 @@ def create_reward_function(
 
         return rewards
 
-    reward_func.__name__ = "ocaml_reward"
+    reward_func.__name__ = "compute_reward"
     return reward_func
 
 
@@ -125,7 +125,7 @@ def _score_single(args: tuple) -> Dict[str, Any]:
     """Score a single completion and return full metadata."""
     pid, completion, tests = args
     info = {"tests": tests, "problem_id": pid}
-    _, metadata = ocaml_reward_with_metadata(completion, info, {})
+    _, metadata = compute_reward_with_metadata(completion, info, {})
 
     # Add prose_penalty_applied for backward compatibility (same as is_degenerate)
     metadata["prose_penalty_applied"] = metadata["is_degenerate"]

@@ -23,7 +23,7 @@ from .metrics import compute_failure_stages
 from .report import generate_html_report
 
 
-from rlvr.environment import extract_code_block, ocaml_reward_with_metadata, prepend_signature
+from rlvr.environment import extract_code_block, compute_reward_with_metadata, prepend_signature
 
 # Configuration via environment variables
 OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "http://localhost:8080/v1/chat/completions")
@@ -128,7 +128,7 @@ def map_reason_to_failure_stage(reason: str | None) -> str:
 def evaluate_solution(pid: str, completion: str, tests: str) -> dict[str, Any]:
     """Evaluate a solution using the reward system."""
     info = {"tests": tests, "problem_id": pid}
-    _, metadata = ocaml_reward_with_metadata(completion, info, {})
+    _, metadata = compute_reward_with_metadata(completion, info, {})
     # Add backward compatibility field
     metadata["prose_penalty_applied"] = metadata["is_degenerate"]
     return metadata

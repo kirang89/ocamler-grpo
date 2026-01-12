@@ -607,7 +607,7 @@ def tests_rubric(completion: str, info: Dict[str, Any], state: Dict[str, Any]) -
     return float(result.score)
 
 
-def ocaml_reward_with_metadata(
+def compute_reward_with_metadata(
     completion: str, info: Dict[str, Any], state: Dict[str, Any]
 ) -> Tuple[float, Dict[str, Any]]:
     """
@@ -734,11 +734,11 @@ def ocaml_reward_with_metadata(
     return float(total_reward), metadata
 
 
-def ocaml_reward(completion: str, info: Dict[str, Any], state: Dict[str, Any]) -> float:
+def compute_reward(completion: str, info: Dict[str, Any], state: Dict[str, Any]) -> float:
     """
     Main verifiers rubric function for OCaml code generation.
 
-    Convenience wrapper around ocaml_reward_with_metadata that returns just the score.
+    Convenience wrapper around compute_reward_with_metadata that returns just the score.
 
     Args:
         completion: Model's completion text
@@ -748,7 +748,7 @@ def ocaml_reward(completion: str, info: Dict[str, Any], state: Dict[str, Any]) -
     Returns:
         Float reward in range [0, 1]
     """
-    score, _ = ocaml_reward_with_metadata(completion, info, state)
+    score, _ = compute_reward_with_metadata(completion, info, state)
     return score
 
 
@@ -817,7 +817,7 @@ def create_ocaml_env(
     # Create environment with OCaml reward rubric
     env = vf.SingleTurnEnv.create(
         system_prompt=system_prompt,
-        rubric=[ocaml_reward],
+        rubric=[compute_reward],
         dataset=dataset,
     )
 
@@ -845,8 +845,8 @@ __all__ = [
     "compile_rubric",
     "tests_rubric",
     # Combined reward functions
-    "ocaml_reward",
-    "ocaml_reward_with_metadata",
+    "compute_reward",
+    "compute_reward_with_metadata",
     # Degenerate and style detection
     "is_degenerate_output",
     "compute_solution_style_penalty",

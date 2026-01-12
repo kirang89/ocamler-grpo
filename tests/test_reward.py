@@ -14,7 +14,7 @@ class TestCreateRewardFunctionBasic:
     def test_function_has_name(self):
         """Returned function has __name__ attribute set."""
         reward_fn = create_reward_function(logger=None)
-        assert reward_fn.__name__ == "ocaml_reward"
+        assert reward_fn.__name__ == "compute_reward"
 
     def test_empty_completions_returns_empty_list(self):
         """Empty completions list returns empty rewards list."""
