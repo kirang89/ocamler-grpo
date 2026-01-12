@@ -1,6 +1,6 @@
-"""Tests for rlvr.reward module - create_reward_function behavior."""
+"""Tests for create_reward_function behavior (TRL adapter)."""
 
-from rlvr.reward import create_reward_function
+from rlvr.train import create_reward_function
 
 
 class TestCreateRewardFunctionBasic:

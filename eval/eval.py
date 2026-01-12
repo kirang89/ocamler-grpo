@@ -23,7 +23,7 @@ from .metrics import compute_failure_stages
 from .report import generate_html_report
 
 
-from rlvr.environment import extract_code_block, compute_reward_with_metadata, prepend_signature
+from rlvr.environment import compute_reward_with_metadata, extract_code_block, prepend_signature
 
 # Configuration via environment variables
 OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "http://localhost:8080/v1/chat/completions")

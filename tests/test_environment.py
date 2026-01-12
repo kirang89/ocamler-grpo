@@ -11,13 +11,15 @@ from pathlib import Path
 import pytest
 
 from rlvr.environment import (
-    compile_reward,
-    count_non_empty_code_lines,
+    compute_reward,
     extract_code_block,
     extract_function_signature,
-    is_degenerate_output,
-    compute_reward,
     prepend_signature,
+)
+from rlvr.reward import (
+    compile_reward,
+    count_non_empty_code_lines,
+    is_degenerate_output,
     tests_reward,
     type_check_reward,
 )

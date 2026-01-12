@@ -13,17 +13,12 @@ Run with: python -m rlvr.train
 import ctypes
 import os
 import sys
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
+from typing import Any, Callable, Dict, List
 
-from peft import PeftConfig
-from transformers import TrainerCallback
-from transformers.trainer_utils import get_last_checkpoint
-from trl import GRPOTrainer
-
-from rlvr.config import create_grpo_config, create_lora_config
-from rlvr.data import DEFAULT_TRAINING_DATASET, build_training_dataset, create_tokenizer
+from rlvr.environment import compute_reward_with_metadata, prepend_signature
 from rlvr.logging import RewardLogger, log_learning_metrics
-from rlvr.reward import create_reward_function
 
 
 def _ensure_cuda_driver():
@@ -54,21 +49,144 @@ def _ensure_cuda_driver():
 
 _ensure_cuda_driver()
 
-# Environment variables for training
-TRAINING_DATASET = os.environ.get("TRAINING_DATASET", DEFAULT_TRAINING_DATASET)
-GRPO_OUTPUT_DIR = os.environ.get("GRPO_OUTPUT_DIR", "grpo_runs")
+DEFAULT_POOL_SIZE = 4
 
 
-class LearningMetricsCallback(TrainerCallback):
-    """Callback that logs essential learning metrics using log_learning_metrics."""
+# ============================================================================
+# TRL Adapter
+# ============================================================================
 
-    def __init__(self, log_path: Path) -> None:
-        self.log_path = log_path
 
-    def on_log(self, args, state, control, logs=None, **kwargs):
-        """Called when trainer logs metrics."""
-        if logs is not None:
-            log_learning_metrics(self.log_path, logs)
+def create_reward_function(
+    logger: RewardLogger | None = None,
+    parallel: bool = True,
+    pool_size: int | None = None,
+) -> Callable:
+    """
+    Create a TRL-compatible reward function with detailed logging.
+
+    Args:
+        logger: RewardLogger for detailed logging. If None, no logging is performed.
+        parallel: Whether to score completions in parallel (default True)
+        pool_size: Number of parallel workers (default from REWARD_POOL_SIZE env var or 4)
+
+    Returns:
+        Function matching TRL's (prompts, completions, **kwargs) -> List[float]
+    """
+    actual_pool_size = pool_size or int(os.environ.get("REWARD_POOL_SIZE", DEFAULT_POOL_SIZE))
+
+    def _score_single(args: tuple) -> Dict[str, Any]:
+        """Score a single completion and return full metadata."""
+        pid, completion, tests = args
+        info = {"tests": tests, "problem_id": pid}
+        _, metadata = compute_reward_with_metadata(completion, info, {})
+        return metadata
+
+    def _score_parallel(args_list: List[tuple], pool_size: int) -> List[Dict[str, Any]]:
+        """Score completions in parallel using a process pool."""
+        with ProcessPoolExecutor(max_workers=pool_size) as executor:
+            future_to_idx = {
+                executor.submit(_score_single, args): idx for idx, args in enumerate(args_list)
+            }
+            results = [None] * len(args_list)
+            for future in as_completed(future_to_idx):
+                idx = future_to_idx[future]
+                results[idx] = future.result()
+        return results
+
+    def reward_func(
+        prompts: List[str],
+        completions: List[str],
+        problem_id: List[str] | None = None,
+        **kwargs,
+    ) -> List[float]:
+        """Score completions and return rewards."""
+        if not completions:
+            return []
+
+        ids = problem_id or kwargs.get("problem_id") or []
+        tests_list = kwargs.get("tests") or []
+
+        full_completions = [prepend_signature(p, c) for p, c in zip(prompts, completions)]
+
+        args_list = [
+            (
+                ids[idx] if idx < len(ids) else f"sample_{idx}",
+                full_completions[idx],
+                tests_list[idx] if idx < len(tests_list) else "",
+            )
+            for idx in range(len(full_completions))
+        ]
+
+        if parallel and len(args_list) > 1:
+            results = _score_parallel(args_list, actual_pool_size)
+        else:
+            results = [_score_single(args) for args in args_list]
+
+        rewards = []
+        detailed_logs = []
+        completion_logs = []
+
+        for idx, result in enumerate(results):
+            pid = ids[idx] if idx < len(ids) else f"sample_{idx}"
+            completion = completions[idx]
+
+            rewards.append(float(result["total_reward"]))
+            detailed_logs.append(_build_detailed_log_entry(pid, completion, result))
+            completion_logs.append(_build_completion_log_entry(pid, completion, result))
+
+        if logger:
+            logger.log("syntax_aware_breakdown", detailed_logs)
+            logger.log("completions", completion_logs)
+
+        return rewards
+
+    reward_func.__name__ = "compute_reward"
+    return reward_func
+
+
+def _build_detailed_log_entry(pid: str, completion: str, result: Dict[str, Any]) -> Dict[str, Any]:
+    """Build detailed log entry for syntax_aware_breakdown.jsonl."""
+    entry = {
+        "problem_id": pid,
+        "total_reward": float(result["total_reward"]),
+        "base_reward": float(result["base_reward"]),
+        "type_check": float(result["type_score"]),
+        "compile": float(result["compile_score"]),
+        "tests": float(result["test_score"]),
+        "syntax_errors": result.get("syntax_errors"),
+        "error_sample": result.get("error_details"),
+        "is_degenerate": result["is_degenerate"],
+        "style_penalty": result.get("style_penalty", 0.0),
+        "style_reasons": result.get("style_reasons", []),
+        "preview": completion[:200],
+    }
+    if result.get("timeout_stage"):
+        entry["timeout_stage"] = result["timeout_stage"]
+    return entry
+
+
+def _build_completion_log_entry(pid: str, completion: str, result: Dict[str, Any]) -> Dict[str, Any]:
+    """Build completion log entry for completions.jsonl."""
+    entry = {
+        "problem_id": pid,
+        "reward": float(result["total_reward"]),
+        "base_reward": float(result["base_reward"]),
+        "length": len(completion),
+        "is_degenerate": result["is_degenerate"],
+        "style_penalty": result.get("style_penalty", 0.0),
+        "completion": completion,
+    }
+    if result.get("timeout_stage"):
+        entry["timeout_stage"] = result["timeout_stage"]
+    if result.get("reason"):
+        entry["reason"] = result["reason"]
+    return entry
+
+
+# ============================================================================
+# Training Entry Point
+# ============================================================================
 
 
 def resolve_model_id() -> str:
@@ -80,11 +198,34 @@ def resolve_model_id() -> str:
 
 
 def main():
+    # Import heavy dependencies only when training
+    from peft import PeftConfig
+    from transformers import TrainerCallback
+    from transformers.trainer_utils import get_last_checkpoint
+    from trl import GRPOTrainer
+
+    from rlvr.config import create_grpo_config, create_lora_config
+    from rlvr.data import DEFAULT_TRAINING_DATASET, build_training_dataset, create_tokenizer
+
+    class LearningMetricsCallback(TrainerCallback):
+        """Callback that logs essential learning metrics using log_learning_metrics."""
+
+        def __init__(self, log_path: Path) -> None:
+            self.log_path = log_path
+
+        def on_log(self, args, state, control, logs=None, **kwargs):
+            """Called when trainer logs metrics."""
+            if logs is not None:
+                log_learning_metrics(self.log_path, logs)
+
+    training_dataset = os.environ.get("TRAINING_DATASET", DEFAULT_TRAINING_DATASET)
+    grpo_output_dir = os.environ.get("GRPO_OUTPUT_DIR", "grpo_runs")
+
     model_id = resolve_model_id()
-    dataset = build_training_dataset(TRAINING_DATASET)
+    dataset = build_training_dataset(training_dataset)
     tokenizer = create_tokenizer(model_id)
 
-    output_path = Path(GRPO_OUTPUT_DIR)
+    output_path = Path(grpo_output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
     reward_logger = RewardLogger(output_path / "reward_logs")
@@ -95,7 +236,7 @@ def main():
     config = create_grpo_config()
 
     # Check for existing checkpoint to resume from
-    last_checkpoint = get_last_checkpoint(GRPO_OUTPUT_DIR)
+    last_checkpoint = get_last_checkpoint(grpo_output_dir)
     if last_checkpoint:
         print(f"Resuming training from checkpoint: {last_checkpoint}")
         # Load LoRA config from checkpoint to ensure compatibility
@@ -125,8 +266,8 @@ def main():
 
     trainer.train(resume_from_checkpoint=last_checkpoint)
 
-    trainer.save_model(GRPO_OUTPUT_DIR)
-    tokenizer.save_pretrained(GRPO_OUTPUT_DIR)
+    trainer.save_model(grpo_output_dir)
+    tokenizer.save_pretrained(grpo_output_dir)
 
 
 if __name__ == "__main__":
