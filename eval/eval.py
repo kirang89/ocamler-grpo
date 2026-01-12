@@ -129,8 +129,6 @@ def evaluate_solution(pid: str, completion: str, tests: str) -> dict[str, Any]:
     """Evaluate a solution using the reward system."""
     info = {"tests": tests, "problem_id": pid}
     _, metadata = compute_reward_with_metadata(completion, info, {})
-    # Add backward compatibility field
-    metadata["prose_penalty_applied"] = metadata["is_degenerate"]
     return metadata
 
 

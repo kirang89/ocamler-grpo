@@ -126,10 +126,6 @@ def _score_single(args: tuple) -> Dict[str, Any]:
     pid, completion, tests = args
     info = {"tests": tests, "problem_id": pid}
     _, metadata = compute_reward_with_metadata(completion, info, {})
-
-    # Add prose_penalty_applied for backward compatibility (same as is_degenerate)
-    metadata["prose_penalty_applied"] = metadata["is_degenerate"]
-
     return metadata
 
 
@@ -162,7 +158,6 @@ def _build_detailed_log_entry(pid: str, completion: str, result: Dict[str, Any])
         "tests": float(result["test_score"]),
         "syntax_errors": result.get("syntax_errors"),
         "error_sample": result.get("error_details"),
-        "prose_penalty_applied": result["prose_penalty_applied"],
         "is_degenerate": result["is_degenerate"],
         "style_penalty": result.get("style_penalty", 0.0),
         "style_reasons": result.get("style_reasons", []),
@@ -180,7 +175,7 @@ def _build_completion_log_entry(pid: str, completion: str, result: Dict[str, Any
         "reward": float(result["total_reward"]),
         "base_reward": float(result["base_reward"]),
         "length": len(completion),
-        "prose_penalty_applied": result["prose_penalty_applied"],
+        "is_degenerate": result["is_degenerate"],
         "style_penalty": result.get("style_penalty", 0.0),
         "completion": completion,
     }

@@ -43,6 +43,9 @@ TYPE_CHECK_MAX_SCORE = 0.25
 COMPILE_SUCCESS_SCORE = 0.10
 TESTS_PASS_SCORE = 0.65
 STYLE_PENALTY_MAX = 0.10
+STYLE_PENALTY_EXTRA_CODE_BLOCK = 0.02
+STYLE_PENALTY_TRAILING_PROSE = 0.03
+TRAILING_PROSE_MIN_LENGTH = 30
 
 
 @dataclass
@@ -467,15 +470,15 @@ def compute_solution_style_penalty(completion: str, code: str) -> tuple[float, l
     code_block_count = len(CODE_BLOCK_RE.findall(completion))
     if code_block_count > 1:
         extra_blocks = code_block_count - 1
-        penalty += 0.02 * extra_blocks
+        penalty += STYLE_PENALTY_EXTRA_CODE_BLOCK * extra_blocks
         reasons.append(f"{code_block_count} code blocks")
 
     # Check 2: Trailing prose after the final code block
     last_fence = completion.rfind("```")
     if last_fence != -1:
         after_code = completion[last_fence + 3 :].strip()
-        if len(after_code) > 30:
-            penalty += 0.03
+        if len(after_code) > TRAILING_PROSE_MIN_LENGTH:
+            penalty += STYLE_PENALTY_TRAILING_PROSE
             reasons.append("trailing prose")
 
     # Cap total penalty
