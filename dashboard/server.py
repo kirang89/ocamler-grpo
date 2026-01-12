@@ -11,8 +11,8 @@ from urllib.parse import urlparse
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 # Serve static files from the directory where this script resides (dashboard/)
 DASHBOARD_DIR = SCRIPT_DIR
-# Default log file is in the parent directory
-DEFAULT_LOG_FILE = os.path.join(os.path.dirname(SCRIPT_DIR), "grpo_runs/learning.log")
+# Default metrics file is in the parent directory (GRPO uses metrics.jsonl like SFT)
+DEFAULT_METRICS_FILE = os.path.join(os.path.dirname(SCRIPT_DIR), "grpo_runs/metrics.jsonl")
 DEFAULT_ERROR_LOG = os.path.join(
     os.path.dirname(SCRIPT_DIR), "grpo_runs/reward_logs/syntax_aware_breakdown.jsonl"
 )
@@ -24,7 +24,9 @@ DEFAULT_SFT_METRICS_FILE = os.path.join(os.path.dirname(SCRIPT_DIR), "sft_runs/m
 SFT_METRICS_FILE = DEFAULT_SFT_METRICS_FILE
 
 PORT = 8080
-# Optional batch metrics file (derived from LOG_FILE if not provided)
+# GRPO metrics file
+GRPO_METRICS_FILE = DEFAULT_METRICS_FILE
+# Optional batch metrics file (derived from GRPO_METRICS_FILE if not provided)
 BATCH_METRICS_FILE = None
 ERROR_LOG_FILE = DEFAULT_ERROR_LOG
 COMPLETIONS_FILE = DEFAULT_COMPLETIONS_FILE
@@ -125,101 +127,72 @@ def get_training_params():
     return params
 
 
-def parse_log_file(log_path):
+# JSONL keys that are always present (required)
+_REQUIRED_KEYS = ["loss", "grad_norm", "learning_rate", "reward_mean", "reward_std",
+                  "syntax_reward_mean", "syntax_reward_std", "entropy", "frac_zero_std"]
+
+# JSONL keys that may be absent (optional)
+_OPTIONAL_KEYS = ["step_time", "mean_length", "kl"]
+
+# Rename these JSONL keys to shorter names for the frontend API
+_OUTPUT_RENAMES = {"grad_norm": "grad", "learning_rate": "lr"}
+
+
+def parse_grpo_metrics(metrics_path):
     """
-    Parse learning.log (JSON lines format), keeping only complete rows (with reward data).
+    Parse GRPO metrics.jsonl file.
     Aggregate all metrics per epoch using mean.
     """
-    # Collect all values per epoch
-    epoch_data = defaultdict(
-        lambda: {
-            "loss": [],
-            "grad": [],
-            "lr": [],
-            "entropy": [],
-            "reward_mean": [],
-            "reward_std": [],
-            "syntax_reward_mean": [],
-            "syntax_reward_std": [],
-            "frac_zero_std": [],
-            "step_time": [],
-            "mean_length": [],
-            "kl": [],
-        }
-    )
+    # Internal keys match JSONL keys for clarity
+    all_keys = _REQUIRED_KEYS + _OPTIONAL_KEYS
+    epoch_data = defaultdict(lambda: {k: [] for k in all_keys})
 
     try:
-        with open(log_path, "r") as f:
+        with open(metrics_path, "r") as f:
             for line in f:
                 line = line.strip()
                 if not line:
                     continue
-
                 try:
                     entry = json.loads(line)
-
-                    # Skip entries without epoch or reward data
-                    if "epoch" not in entry or "reward_mean" not in entry:
-                        continue
-
-                    epoch = float(entry["epoch"])
-
-                    # Collect metrics for this epoch
-                    if "loss" in entry:
-                        epoch_data[epoch]["loss"].append(float(entry["loss"]))
-                    if "grad_norm" in entry:
-                        epoch_data[epoch]["grad"].append(float(entry["grad_norm"]))
-                    if "learning_rate" in entry:
-                        epoch_data[epoch]["lr"].append(float(entry["learning_rate"]))
-                    if "reward_mean" in entry:
-                        epoch_data[epoch]["reward_mean"].append(float(entry["reward_mean"]))
-                    if "reward_std" in entry:
-                        epoch_data[epoch]["reward_std"].append(float(entry["reward_std"]))
-                    if "syntax_reward_mean" in entry:
-                        epoch_data[epoch]["syntax_reward_mean"].append(float(entry["syntax_reward_mean"]))
-                    if "syntax_reward_std" in entry:
-                        epoch_data[epoch]["syntax_reward_std"].append(float(entry["syntax_reward_std"]))
-                    if "entropy" in entry:
-                        epoch_data[epoch]["entropy"].append(float(entry["entropy"]))
-                    if "frac_reward_zero_std" in entry:
-                        epoch_data[epoch]["frac_zero_std"].append(float(entry["frac_reward_zero_std"]))
-                    if "step_time" in entry:
-                        epoch_data[epoch]["step_time"].append(float(entry["step_time"]))
-                    if "mean_length" in entry:
-                        epoch_data[epoch]["mean_length"].append(float(entry["mean_length"]))
-                    if "kl" in entry:
-                        epoch_data[epoch]["kl"].append(float(entry["kl"]))
-
                 except json.JSONDecodeError:
-                    # Skip malformed JSON lines
                     continue
 
-    except FileNotFoundError:
-        print(f"Warning: Log file {log_path} not found.")
-        return {"epochs": [], "error": "Log file not found"}
+                epoch = entry.get("epoch")
+                if epoch is None:
+                    continue
 
-    # Aggregate: compute mean per epoch
+                # Only include entries with meaningful data (have reward_mean)
+                if entry.get("reward_mean") is None:
+                    continue
+
+                # Required fields - use 0 as default
+                for key in _REQUIRED_KEYS:
+                    epoch_data[epoch][key].append(entry.get(key, 0))
+
+                # Optional fields - only append if present
+                for key in _OPTIONAL_KEYS:
+                    if entry.get(key) is not None:
+                        epoch_data[epoch][key].append(entry[key])
+
+    except FileNotFoundError:
+        print(f"Warning: Metrics file {metrics_path} not found.")
+        return {"epochs": [], "error": "Metrics file not found"}
+
     def mean(lst):
         return sum(lst) / len(lst) if lst else 0
 
     sorted_epochs = sorted(epoch_data.keys())
 
+    # Build result, renaming keys for frontend where needed
     result = {
         "epochs": sorted_epochs,
         "latest_epoch": sorted_epochs[-1] if sorted_epochs else None,
-        "loss": [mean(epoch_data[e]["loss"]) for e in sorted_epochs],
-        "grad": [mean(epoch_data[e]["grad"]) for e in sorted_epochs],
-        "lr": [mean(epoch_data[e]["lr"]) for e in sorted_epochs],
-        "entropy": [mean(epoch_data[e]["entropy"]) for e in sorted_epochs],
-        "reward_mean": [mean(epoch_data[e]["reward_mean"]) for e in sorted_epochs],
-        "reward_std": [mean(epoch_data[e]["reward_std"]) for e in sorted_epochs],
-        "syntax_reward_mean": [mean(epoch_data[e]["syntax_reward_mean"]) for e in sorted_epochs],
-        "syntax_reward_std": [mean(epoch_data[e]["syntax_reward_std"]) for e in sorted_epochs],
-        "frac_zero_std": [mean(epoch_data[e]["frac_zero_std"]) for e in sorted_epochs],
-        "step_time": [mean(epoch_data[e]["step_time"]) for e in sorted_epochs],
-        "mean_length": [mean(epoch_data[e]["mean_length"]) for e in sorted_epochs],
-        "kl": [mean(epoch_data[e]["kl"]) for e in sorted_epochs],
     }
+
+    for key in all_keys:
+        output_key = _OUTPUT_RENAMES.get(key, key)
+        result[output_key] = [mean(epoch_data[e][key]) for e in sorted_epochs]
 
     return result
 
@@ -273,7 +246,7 @@ def resolve_error_log_path(configured_path: str) -> str | None:
     if configured_path:
         candidates.append(configured_path)
 
-    log_dir = os.path.dirname(LOG_FILE)
+    log_dir = os.path.dirname(GRPO_METRICS_FILE)
     reward_log_dir = os.path.join(log_dir, "reward_logs")
     candidates.append(os.path.join(reward_log_dir, "syntax_aware_breakdown.jsonl"))
 
@@ -556,7 +529,7 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Content-type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
-            data = parse_log_file(LOG_FILE)
+            data = parse_grpo_metrics(GRPO_METRICS_FILE)
             data["pass_metrics"] = parse_batch_metrics(BATCH_METRICS_FILE)
             data["training_params"] = get_training_params()
             data["error_metrics"] = parse_error_log(ERROR_LOG_FILE)
@@ -583,7 +556,9 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="GRPO Training Dashboard Server")
     parser.add_argument("--port", type=int, default=PORT, help="Port to serve on")
-    parser.add_argument("--log", type=str, default=DEFAULT_LOG_FILE, help="Path to learning.log")
+    parser.add_argument(
+        "--metrics", type=str, default=DEFAULT_METRICS_FILE, help="Path to GRPO metrics.jsonl"
+    )
     parser.add_argument(
         "--batch-metrics",
         type=str,
@@ -610,18 +585,18 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    LOG_FILE = args.log
+    GRPO_METRICS_FILE = args.metrics
     if args.batch_metrics:
         BATCH_METRICS_FILE = args.batch_metrics
     else:
-        log_dir = os.path.dirname(LOG_FILE)
+        log_dir = os.path.dirname(GRPO_METRICS_FILE)
         BATCH_METRICS_FILE = os.path.join(log_dir, "reward_logs", "batch_metrics.jsonl")
     ERROR_LOG_FILE = args.error_log
     COMPLETIONS_FILE = args.completions
     SFT_METRICS_FILE = args.sft_metrics
 
     print("Starting dashboard server...")
-    print(f"  Log file: {LOG_FILE}")
+    print(f"  GRPO metrics: {GRPO_METRICS_FILE}")
     print(f"  Batch metrics: {BATCH_METRICS_FILE}")
     print(f"  Error log: {resolve_error_log_path(ERROR_LOG_FILE) or ERROR_LOG_FILE}")
     print(f"  Completions: {COMPLETIONS_FILE}")

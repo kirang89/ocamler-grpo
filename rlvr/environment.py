@@ -6,7 +6,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
-import verifiers as vf
 from datasets import Dataset, load_dataset
 
 CODE_BLOCK_RE = re.compile(r"```(.*?)```", re.DOTALL)
@@ -580,7 +579,7 @@ def load_ocaml_dataset(dataset_id: str = "kiranpg/ocaml-training-problems") -> D
 def create_ocaml_env(
     dataset_id: str = "kiranpg/ocaml-training-problems",
     system_prompt: str = "",
-) -> vf.SingleTurnEnv:
+):
     """
     Create a verifiers-compatible environment for OCaml code generation.
 
@@ -597,6 +596,8 @@ def create_ocaml_env(
     Returns:
         SingleTurnEnv configured for OCaml code generation
     """
+    import verifiers as vf
+
     # Load and transform dataset
     dataset = load_ocaml_dataset(dataset_id)
 
