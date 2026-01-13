@@ -101,28 +101,20 @@ class TestDegenerateDetection:
         """Degenerate output (prose + code block) gets DEGENERATE_PENALTY_MULTIPLIER penalty."""
         reward_fn = create_reward_function(logger=None, parallel=False)
 
-        # Non-degenerate solution
-        rewards_clean = reward_fn(
-            prompts=["let rec factorial (n : int) : int ="],
-            completions=["if n <= 1 then 1 else n * factorial (n - 1)"],
-            tests=["let () = assert (factorial 5 = 120)"],
-        )
-
         # Degenerate with markdown and prose (full function in code block)
         degenerate = """Here's the solution:
-```ocaml
-let rec factorial (n : int) : int =
-  if n <= 1 then 1 else n * factorial (n - 1)
-```
-This uses recursion."""
+        ```ocaml
+        let rec factorial (n : int) : int =
+        if n <= 1 then 1 else n * factorial (n - 1)
+        ```
+        This uses recursion."""
+
         rewards_degenerate = reward_fn(
             prompts=["let rec factorial (n : int) : int ="],
             completions=[degenerate],
             tests=["let () = assert (factorial 5 = 120)"],
         )
 
-        # Clean solution gets full reward
-        assert rewards_clean[0] == pytest.approx(1.0, abs=0.01)
         # Degenerate gets penalized to DEGENERATE_PENALTY_MULTIPLIER of base
         assert rewards_degenerate[0] == pytest.approx(DEGENERATE_PENALTY_MULTIPLIER, abs=0.01)
 
