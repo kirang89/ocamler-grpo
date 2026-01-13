@@ -386,6 +386,12 @@
             };
         }
 
+        function formatNumber(value) {
+            if (typeof value !== 'number') return value;
+            // Format to max 5 significant digits
+            return parseFloat(value.toPrecision(5));
+        }
+
         function getCommonConfig(colors, xLabel = 'Step') {
             return {
                 responsive: true,
@@ -396,11 +402,21 @@
                 scales: {
                     x: {
                         title: { display: true, text: xLabel, color: colors.tick },
-                        ticks: { color: colors.tick },
+                        ticks: {
+                            color: colors.tick,
+                            callback: function(value, index, ticks) {
+                                return formatNumber(this.getLabelForValue(value));
+                            }
+                        },
                         grid: { color: colors.grid }
                     },
                     y: {
-                        ticks: { color: colors.tick },
+                        ticks: {
+                            color: colors.tick,
+                            callback: function(value) {
+                                return formatNumber(value);
+                            }
+                        },
                         grid: { color: colors.grid }
                     }
                 }
