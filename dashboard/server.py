@@ -286,6 +286,15 @@ def parse_error_log(log_path: str):
         return abs(value - target) <= tol
 
     syntax_count = type_count = compile_count = exec_fail_count = 0
+    # Track test pass rate buckets for completions that compiled
+    test_buckets = {
+        "0%": 0,
+        "1-25%": 0,
+        "26-50%": 0,
+        "51-75%": 0,
+        "76-99%": 0,
+        "100%": 0,
+    }
     entries = []
 
     try:
@@ -318,6 +327,23 @@ def parse_error_log(log_path: str):
                     and is_number(test_score)
                     and test_score < 0.65
                 )
+
+                # Track test pass rates for completions that compiled (compile_score == 0.10)
+                if is_number(compile_score) and almost_equal(compile_score, 0.10) and is_number(test_score):
+                    # test_score max is 0.65, so pass_rate = test_score / 0.65
+                    pass_rate = test_score / 0.65 if test_score > 0 else 0
+                    if almost_equal(pass_rate, 1.0, tol=0.001):
+                        test_buckets["100%"] += 1
+                    elif pass_rate > 0.75:
+                        test_buckets["76-99%"] += 1
+                    elif pass_rate > 0.50:
+                        test_buckets["51-75%"] += 1
+                    elif pass_rate > 0.25:
+                        test_buckets["26-50%"] += 1
+                    elif pass_rate > 0:
+                        test_buckets["1-25%"] += 1
+                    else:
+                        test_buckets["0%"] += 1
 
                 entries.append((syntax_error, type_error, compile_error, execution_failure))
     except FileNotFoundError:
@@ -364,6 +390,8 @@ def parse_error_log(log_path: str):
         "execution_failures": exec_fail_count,
         "success": max(0, success_count),
     }
+    # Add test pass rate distribution (for completions that compiled)
+    result["test_pass_distribution"] = test_buckets
     return result
 
 
