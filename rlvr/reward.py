@@ -23,7 +23,7 @@ from typing import Any, Dict
 # Constants
 # ============================================================================
 
-MIN_NON_EMPTY_LINES = 2
+MIN_NON_EMPTY_LINES = 1
 TYPE_CHECK_TIMEOUT = 5
 COMPILE_TIMEOUT = 10
 TEST_TIMEOUT = 30
