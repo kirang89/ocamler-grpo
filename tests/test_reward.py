@@ -1,5 +1,7 @@
 """Tests for create_reward_function behavior (TRL adapter)."""
 
+import pytest
+
 from rlvr.environment import DEGENERATE_PENALTY_MULTIPLIER
 from rlvr.train import create_reward_function
 
@@ -106,20 +108,23 @@ class TestDegenerateDetection:
             tests=["let () = assert (factorial 5 = 120)"],
         )
 
-        # Degenerate with markdown and prose
+        # Degenerate with markdown and prose (full function in code block)
         degenerate = """Here's the solution:
-        ```ocaml
-        if n <= 1 then 1 else n * factorial (n - 1)
-        ```
-        This uses recursion."""
+```ocaml
+let rec factorial (n : int) : int =
+  if n <= 1 then 1 else n * factorial (n - 1)
+```
+This uses recursion."""
         rewards_degenerate = reward_fn(
             prompts=["let rec factorial (n : int) : int ="],
             completions=[degenerate],
             tests=["let () = assert (factorial 5 = 120)"],
         )
 
-        # Degenerate should be penalized (DEGENERATE_PENALTY_MULTIPLIER)
-        assert rewards_degenerate[0] < rewards_clean[0]
+        # Clean solution gets full reward
+        assert rewards_clean[0] == pytest.approx(1.0, abs=0.01)
+        # Degenerate gets penalized to DEGENERATE_PENALTY_MULTIPLIER of base
+        assert rewards_degenerate[0] == pytest.approx(DEGENERATE_PENALTY_MULTIPLIER, abs=0.01)
 
     def test_stub_solution_penalized(self):
         """Stub solutions (failwith, todo) are detected as degenerate."""
