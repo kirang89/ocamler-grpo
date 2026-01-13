@@ -11,60 +11,23 @@ from pathlib import Path
 import pytest
 
 from rlvr.environment import (
-    compile_reward,
-    count_non_empty_code_lines,
+    DEGENERATE_PENALTY_MULTIPLIER,
+    compute_reward,
+    compute_reward_with_metadata,
     extract_code_block,
     extract_function_signature,
-    is_degenerate_output,
-    ocaml_reward,
     prepend_signature,
+)
+from rlvr.reward import (
+    COMPILE_SUCCESS_SCORE,
+    TESTS_PASS_SCORE,
+    TYPE_CHECK_MAX_SCORE,
+    compile_reward,
+    count_non_empty_code_lines,
+    is_degenerate_output,
     tests_reward,
     type_check_reward,
 )
-
-# ============================================================================
-# Code Extraction Tests
-# ============================================================================
-
-
-class TestCodeExtraction:
-    def test_extract_code_block_with_language_hint(self):
-        """Test extraction from markdown fences with language hint."""
-        code = "let x = 1"
-        assert extract_code_block(f"```ocaml\n{code}\n```") == code
-        assert extract_code_block(f"```ml\n{code}\n```") == code
-        assert extract_code_block(f"```language:ocaml\n{code}\n```") == code
-
-    def test_extract_code_block_without_hint(self):
-        """Test extraction without language hint."""
-        code = "let x = 1"
-        assert extract_code_block(f"```\n{code}\n```") == code
-
-    def test_extract_multiple_code_blocks(self):
-        """Test handling of multiple code blocks (should take first valid)."""
-        # Empty block followed by valid block
-        text = "```\n```\n```ocaml\nlet x = 1\n```"
-        assert extract_code_block(text) == "let x = 1"
-
-        # Multiple valid blocks - take first
-        text = "```ocaml\nlet x = 1\n```\n```ocaml\nlet y = 2\n```"
-        assert extract_code_block(text) == "let x = 1"
-
-        # Skip language-only blocks
-        text = "```ocaml```\n```\nlet x = 1\n```"
-        assert extract_code_block(text) == "let x = 1"
-
-    def test_extract_fallback_to_raw_text(self):
-        """Test fallback to raw text when no code blocks."""
-        code = "let x = 1"
-        assert extract_code_block(code) == code
-
-    def test_extract_with_prose_and_code_block(self):
-        """Test extraction with prose before code block."""
-        code = "let add x y = x + y"
-        text = f"Here's the solution:\n```ocaml\n{code}\n```\n Try it out and let me know"
-        assert extract_code_block(text) == code
-
 
 SIGNATURE_PREPEND_TEST_CASES = [
     # (prompt, completion, expected_completion, description)
@@ -198,6 +161,50 @@ SIGNATURE_TEST_CASES = [
 ]
 
 
+# ============================================================================
+# Code Extraction Tests
+# ============================================================================
+
+
+class TestCodeExtraction:
+    def test_extract_code_block_with_language_hint(self):
+        """Test extraction from markdown fences with language hint."""
+        code = "let x = 1"
+        assert extract_code_block(f"```ocaml\n{code}\n```") == code
+        assert extract_code_block(f"```ml\n{code}\n```") == code
+        assert extract_code_block(f"```language:ocaml\n{code}\n```") == code
+
+    def test_extract_code_block_without_hint(self):
+        """Test extraction without language hint."""
+        code = "let x = 1"
+        assert extract_code_block(f"```\n{code}\n```") == code
+
+    def test_extract_multiple_code_blocks(self):
+        """Test handling of multiple code blocks (should take first valid)."""
+        # Empty block followed by valid block
+        text = "```\n```\n```ocaml\nlet x = 1\n```"
+        assert extract_code_block(text) == "let x = 1"
+
+        # Multiple valid blocks - take first
+        text = "```ocaml\nlet x = 1\n```\n```ocaml\nlet y = 2\n```"
+        assert extract_code_block(text) == "let x = 1"
+
+        # Skip language-only blocks
+        text = "```ocaml```\n```\nlet x = 1\n```"
+        assert extract_code_block(text) == "let x = 1"
+
+    def test_extract_fallback_to_raw_text(self):
+        """Test fallback to raw text when no code blocks."""
+        code = "let x = 1"
+        assert extract_code_block(code) == code
+
+    def test_extract_with_prose_and_code_block(self):
+        """Test extraction with prose before code block."""
+        code = "let add x y = x + y"
+        text = f"Here's the solution:\n```ocaml\n{code}\n```\n Try it out and let me know"
+        assert extract_code_block(text) == code
+
+
 class TestFunctionSignatureExtraction:
     """Tests for extract_function_signature and prepend_signature functions."""
 
@@ -301,31 +308,31 @@ class TestDegenerateDetection:
         assert any(r.startswith("stub solution") for r in reasons)
 
         stub2 = '''let sort_array arr =
-  failwith "implement me"'''
+        failwith "implement me"'''
         is_deg, reasons = is_degenerate_output(stub2, stub2)
         assert is_deg is True
         assert any(r.startswith("stub solution") for r in reasons)
 
         # Longer code with failwith should not trigger (could be legitimate error handling)
         stub3 = '''let sort_array arr =
-  let x = 1 in
-  failwith "implement later"'''
+        let x = 1 in
+        failwith "implement later"'''
         is_deg, reasons = is_degenerate_output(stub3, stub3)
         assert is_deg is False
         assert not any(r.startswith("stub solution") for r in reasons)
 
     def test_placeholder_comment_detection(self):
         """Test placeholder comments in short code are detected."""
-        stub = '''let determine_convexity (terms : (float * int * int) list) (n : int) : string =
-  "Convex" (* placeholder, replace with actual logic *)'''
+        stub = """let determine_convexity (terms : (float * int * int) list) (n : int) : string =
+        "Convex" (* placeholder, replace with actual logic *)"""
         is_deg, reasons = is_degenerate_output(stub, stub)
         assert is_deg is True
         assert any(r.startswith("stub solution") for r in reasons)
 
     def test_assert_false_detection(self):
         """Test assert false placeholders are detected."""
-        stub = '''let solve x =
-  assert false'''
+        stub = """let solve x =
+        assert false"""
         is_deg, reasons = is_degenerate_output(stub, stub)
         assert is_deg is True
         assert "stub solution (assert false)" in reasons
@@ -340,12 +347,12 @@ class TestDegenerateDetection:
 
         # More complex code with good keyword density
         code = """
-let rec quicksort = function
-  | [] -> []
-  | pivot :: rest ->
-      let smaller, larger = List.partition (fun x -> x < pivot) rest in
-      quicksort smaller @ [pivot] @ quicksort larger
-"""
+        let rec quicksort = function
+          | [] -> []
+          | pivot :: rest ->
+              let smaller, larger = List.partition (fun x -> x < pivot) rest in
+              quicksort smaller @ [pivot] @ quicksort larger
+        """
         completion = f"```ocaml\n{code}\n```"
         is_deg, reasons = is_degenerate_output(completion, code)
         assert is_deg is False
@@ -533,7 +540,7 @@ class TestOCamlCompilation:
 
 @pytest.mark.skipif(not shutil.which("ocamlc"), reason="OCaml not installed")
 class TestOCamlRewardEndToEnd:
-    """End-to-end tests for ocaml_reward function."""
+    """End-to-end tests for compute_reward function."""
 
     @pytest.fixture(autouse=True)
     def clear_prose_penalty_env(self):
@@ -547,16 +554,16 @@ class TestOCamlRewardEndToEnd:
         """Test with valid OCaml code that passes tests."""
         # Note: Code needs MIN_NON_EMPTY_LINES (2) lines to be scored
         completion = """```ocaml
-let add x y = x + y
-let sub x y = x - y
-```"""
+        let add x y = x + y
+        let sub x y = x - y
+        ```"""
         info = {
             "tests": "let () = assert (add 1 2 = 3)",
             "problem_id": "test_add",
         }
         state = {"problem_id": "test_add"}
 
-        reward = ocaml_reward(completion, info, state)
+        reward = compute_reward(completion, info, state)
 
         # Should get full reward (0.25 type + 0.10 compile + 0.65 tests = 1.0)
         assert reward == 1.0
@@ -565,16 +572,16 @@ let sub x y = x - y
         """Test with code that has type errors."""
         # Note: Code needs MIN_NON_EMPTY_LINES (2) lines to be scored
         completion = """```ocaml
-let add x y : int = "not an int"
-let sub x y : int = "also wrong"
-```"""
+        let add x y : int = "not an int"
+        let sub x y : int = "also wrong"
+        ```"""
         info = {
             "tests": "let () = assert (add 1 2 = 3)",
             "problem_id": "test_type_error",
         }
         state = {"problem_id": "test_type_error"}
 
-        reward = ocaml_reward(completion, info, state)
+        reward = compute_reward(completion, info, state)
 
         # Should get partial credit from type check (graduated for type errors)
         # Plus minimal compile credit (0.01)
@@ -586,23 +593,23 @@ let sub x y : int = "also wrong"
         # Note: Code needs MIN_NON_EMPTY_LINES (2) lines to be scored
         completion = """Here's the solution to your problem:
 
-```ocaml
-let add x y = x + y
-let sub x y = x - y
-```
+        ```ocaml
+        let add x y = x + y
+        let sub x y = x - y
+        ```
 
-This implementation works by adding the two numbers together."""
+        This implementation works by adding the two numbers together."""
         info = {
             "tests": "let () = assert (add 1 2 = 3)",
             "problem_id": "test_prose",
         }
         state = {"problem_id": "test_prose"}
 
-        reward = ocaml_reward(completion, info, state)
+        reward = compute_reward(completion, info, state)
 
-        # Should get penalized to 0.3x of base reward
-        # Base would be 1.0, so should be around 0.3
-        assert 0.2 < reward < 0.4
+        # Should get penalized to DEGENERATE_PENALTY_MULTIPLIER of base reward
+        # Base would be 1.0, so should equal the multiplier
+        assert reward == pytest.approx(DEGENERATE_PENALTY_MULTIPLIER, abs=0.01)
 
     def test_empty_code(self):
         """Test with empty or minimal code gets zero reward."""
@@ -620,21 +627,21 @@ This implementation works by adding the two numbers together."""
         state = {"problem_id": "test_empty"}
 
         for completion in completions:
-            reward = ocaml_reward(completion, info, state)
+            reward = compute_reward(completion, info, state)
             assert reward == 0.0
 
     def test_syntax_error(self):
         """Test with syntax errors gets zero reward."""
         completion = """```ocaml
-let add x y =
-```"""
+        let add x y =
+        ```"""
         info = {
             "tests": "let () = ()",
             "problem_id": "test_syntax",
         }
         state = {"problem_id": "test_syntax"}
 
-        reward = ocaml_reward(completion, info, state)
+        reward = compute_reward(completion, info, state)
         assert reward == 0.0
 
 
@@ -647,22 +654,22 @@ class TestRewardInterface:
     """Tests for reward function interface and compatibility."""
 
     def test_reward_signature(self):
-        """Test that ocaml_reward has the correct signature."""
+        """Test that compute_reward has the correct signature."""
         import inspect
 
-        sig = inspect.signature(ocaml_reward)
+        sig = inspect.signature(compute_reward)
         params = list(sig.parameters.keys())
 
         assert params == ["completion", "info", "state"]
         assert sig.return_annotation is float or sig.return_annotation is inspect.Signature.empty
 
     def test_reward_return_type(self):
-        """Test that ocaml_reward returns a float."""
+        """Test that compute_reward returns a float."""
         completion = "let x = 1"
         info = {"tests": "", "problem_id": "test"}
         state = {"problem_id": "test"}
 
-        reward = ocaml_reward(completion, info, state)
+        reward = compute_reward(completion, info, state)
         assert isinstance(reward, float)
 
     def test_reward_range(self):
@@ -678,7 +685,7 @@ class TestRewardInterface:
         state = {"problem_id": "test"}
 
         for completion in test_cases:
-            reward = ocaml_reward(completion, info, state)
+            reward = compute_reward(completion, info, state)
             assert 0.0 <= reward <= 1.0
 
     def test_missing_problem_id(self):
@@ -688,7 +695,7 @@ class TestRewardInterface:
         state = {}
 
         # Should not crash, should use "unknown" as problem_id
-        reward = ocaml_reward(completion, info, state)
+        reward = compute_reward(completion, info, state)
         assert isinstance(reward, float)
 
     def test_missing_tests(self):
@@ -698,8 +705,179 @@ class TestRewardInterface:
         state = {"problem_id": "test"}
 
         # Should not crash, should use empty string for tests
-        reward = ocaml_reward(completion, info, state)
+        reward = compute_reward(completion, info, state)
         assert isinstance(reward, float)
+
+
+# ============================================================================
+# Metadata Structure Tests
+# ============================================================================
+
+
+@pytest.mark.skipif(not shutil.which("ocamlc"), reason="OCaml not installed")
+class TestComputeRewardMetadata:
+    """Tests for compute_reward_with_metadata return structure."""
+
+    def test_metadata_has_all_required_keys(self):
+        """Test that metadata contains all expected keys."""
+        completion = """```ocaml
+        let add x y = x + y
+        let sub x y = x - y
+        ```"""
+        info = {"tests": "let () = assert (add 1 2 = 3)", "problem_id": "test_meta"}
+        state = {"problem_id": "test_meta"}
+
+        score, metadata = compute_reward_with_metadata(completion, info, state)
+
+        required_keys = [
+            "problem_id",
+            "total_reward",
+            "base_reward",
+            "type_score",
+            "compile_score",
+            "test_score",
+            "syntax_errors",
+            "error_details",
+            "is_degenerate",
+            "degenerate_reasons",
+            "style_penalty",
+            "style_reasons",
+            "reason",
+            "timeout_stage",
+            "tests_passed",
+        ]
+
+        for key in required_keys:
+            assert key in metadata, f"Missing key: {key}"
+
+    def test_metadata_score_matches_return_value(self):
+        """Test that metadata total_reward matches returned score."""
+        completion = """```ocaml
+        let add x y = x + y
+        let sub x y = x - y
+        ```"""
+        info = {"tests": "let () = assert (add 1 2 = 3)", "problem_id": "test_match"}
+        state = {"problem_id": "test_match"}
+
+        score, metadata = compute_reward_with_metadata(completion, info, state)
+
+        assert score == metadata["total_reward"]
+
+    def test_metadata_tests_passed_flag_correct(self):
+        """Test that tests_passed flag reflects test success."""
+        # Perfect solution - should pass
+        passing = """```ocaml
+        let add x y = x + y
+        let sub x y = x - y
+        ```"""
+        info = {"tests": "let () = assert (add 1 2 = 3)", "problem_id": "test_pass"}
+
+        _, metadata = compute_reward_with_metadata(passing, info, {})
+        assert metadata["tests_passed"] is True
+
+        # Failing solution - should not pass
+        failing = """```ocaml
+        let add x y = x - y
+        let sub x y = x + y
+        ```"""
+        _, metadata = compute_reward_with_metadata(failing, info, {})
+        assert metadata["tests_passed"] is False
+
+
+# ============================================================================
+# Score Weights Tests
+# ============================================================================
+
+
+class TestScoreWeights:
+    """Tests for reward score weight constants."""
+
+    def test_weights_sum_to_one(self):
+        """Test that score weights sum to exactly 1.0."""
+        total = TYPE_CHECK_MAX_SCORE + COMPILE_SUCCESS_SCORE + TESTS_PASS_SCORE
+        assert total == 1.0, f"Weights sum to {total}, expected 1.0"
+
+    def test_individual_weights_correct(self):
+        """Test individual weight values."""
+        assert TYPE_CHECK_MAX_SCORE == 0.25
+        assert COMPILE_SUCCESS_SCORE == 0.10
+        assert TESTS_PASS_SCORE == 0.65
+
+    @pytest.mark.skipif(not shutil.which("ocamlc"), reason="OCaml not installed")
+    def test_perfect_solution_achieves_max_score(self):
+        """Test that a perfect solution gets exactly 1.0 reward."""
+        completion = """```ocaml
+        let add x y = x + y
+        let sub x y = x - y
+        ```"""
+        info = {"tests": "let () = assert (add 1 2 = 3)", "problem_id": "test_perfect"}
+
+        _, metadata = compute_reward_with_metadata(completion, info, {})
+
+        assert metadata["type_score"] == TYPE_CHECK_MAX_SCORE
+        assert metadata["compile_score"] == COMPILE_SUCCESS_SCORE
+        assert metadata["test_score"] == TESTS_PASS_SCORE
+        assert metadata["total_reward"] == 1.0
+
+
+# ============================================================================
+# Timeout Behavior Tests
+# ============================================================================
+
+
+@pytest.mark.skipif(not shutil.which("ocamlc"), reason="OCaml not installed")
+class TestTimeoutBehavior:
+    """Tests for timeout handling in reward functions."""
+
+    # def test_infinite_loop_times_out(self):
+    #     """Test that code with infinite loop times out during test execution."""
+    #     # This code compiles but runs forever
+    #     completion = """```ocaml
+    #     let rec infinite () = infinite ()
+    #     let add x y = infinite (); x + y
+    #     ```"""
+    #     info = {
+    #         "tests": "let () = assert (add 1 2 = 3)",
+    #         "problem_id": "test_infinite",
+    #     }
+
+    #     score, metadata = compute_reward_with_metadata(completion, info, {})
+
+    #     # Should timeout during test execution
+    #     # Gets type_check + compile but no test score
+    #     assert metadata["type_score"] == TYPE_CHECK_MAX_SCORE
+    #     assert metadata["compile_score"] == COMPILE_SUCCESS_SCORE
+    #     assert metadata["test_score"] == 0.0
+    #     assert metadata["timeout_stage"] == "tests"
+    #     assert score < 1.0
+
+    # def test_timeout_metadata_populated(self):
+    #     """Test that timeout_stage is set correctly on timeout."""
+    #     # Infinite recursion that will timeout
+    #     completion = """```ocaml
+    #     let rec loop n = loop (n + 1)
+    #     let x = loop 0
+    #     ```"""
+    #     info = {"tests": "let () = ()", "problem_id": "test_timeout_meta"}
+
+    #     _, metadata = compute_reward_with_metadata(completion, info, {})
+
+    #     # This should timeout during tests (if it compiles)
+    #     # or fail to compile due to infinite loop at module level
+    #     if metadata["compile_score"] > 0:
+    #         assert metadata["timeout_stage"] == "tests"
+
+    # def test_non_timeout_has_none_timeout_stage(self):
+    #     """Test that timeout_stage is None for non-timeout completions."""
+    #     completion = """```ocaml
+    #     let add x y = x + y
+    #     let sub x y = x - y
+    #     ```"""
+    #     info = {"tests": "let () = assert (add 1 2 = 3)", "problem_id": "test_no_timeout"}
+
+    #     _, metadata = compute_reward_with_metadata(completion, info, {})
+
+    #     assert metadata["timeout_stage"] is None
 
 
 if __name__ == "__main__":

@@ -23,8 +23,7 @@ from .metrics import compute_failure_stages
 from .report import generate_html_report
 
 
-from rlvr.environment import extract_code_block, prepend_signature
-from rlvr.reward import _score_completion_vf
+from rlvr.environment import compute_reward_with_metadata, extract_code_block, prepend_signature
 
 # Configuration via environment variables
 OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "http://localhost:8080/v1/chat/completions")
@@ -128,7 +127,9 @@ def map_reason_to_failure_stage(reason: str | None) -> str:
 
 def evaluate_solution(pid: str, completion: str, tests: str) -> dict[str, Any]:
     """Evaluate a solution using the reward system."""
-    return _score_completion_vf(pid, completion, tests)
+    info = {"tests": tests, "problem_id": pid}
+    _, metadata = compute_reward_with_metadata(completion, info, {})
+    return metadata
 
 
 def read_problems(dataset_id: str) -> list[dict[str, Any]]:

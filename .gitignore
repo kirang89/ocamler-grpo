@@ -30,4 +30,4 @@ data/
 eval_runs
 
 # SFT Runs
-sft_runs
+sft_runs.worktrees/

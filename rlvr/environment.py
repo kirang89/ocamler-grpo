@@ -1,112 +1,57 @@
-import os
+# environment.py - Verifiers environment setup for OCaml code generation
+#
+# This module provides:
+# - Code extraction utilities (extract_code_block)
+# - Function signature handling (prepend_signature, extract_function_signature)
+# - Dataset loading (load_ocaml_dataset)
+# - Verifiers environment factory (create_ocaml_env)
+
+"""
+Verifiers environment setup for OCaml GRPO training.
+
+This module is a thin wrapper that:
+- Provides utilities for extracting and manipulating OCaml code
+- Loads and transforms datasets into verifiers format
+- Creates verifiers SingleTurnEnv with OCaml reward functions
+"""
+
 import re
-import subprocess
 import tempfile
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
-import verifiers as vf
-from datasets import Dataset, load_dataset
+from rlvr.reward import (
+    COMPILE_SUCCESS_SCORE,
+    MIN_NON_EMPTY_LINES,
+    TESTS_PASS_SCORE,
+    TYPE_CHECK_MAX_SCORE,
+    RewardResult,
+    compile_reward,
+    compute_solution_style_penalty,
+    count_non_empty_code_lines,
+    is_degenerate_output,
+    tests_reward,
+    type_check_reward,
+)
+
+# ============================================================================
+# Constants
+# ============================================================================
 
 CODE_BLOCK_RE = re.compile(r"```(.*?)```", re.DOTALL)
 LANGUAGE_HINTS = {"ocaml", "ml", "language:ocaml"}
-# Pattern to extract function signature from prompt (the let/let rec ... = part after docstring)
-# Handles: literal \n, type definitions between *) and let, trailing whitespace/newlines
+DEGENERATE_PENALTY_MULTIPLIER = 0.3
+
+# Pattern to extract function signature from prompt
 FUNC_SIGNATURE_RE = re.compile(
     r"(?:let|and)\s+(?:rec\s+)?(?P<name>\w+).*?=(?=(?:\s|\\n)*$)",
     re.DOTALL,
 )
-MIN_NON_EMPTY_LINES = 2
-TYPE_CHECK_TIMEOUT = 5
-COMPILE_TIMEOUT = 10
-TEST_TIMEOUT = 30
-SYNTAX_ERROR_RE = (
-    r"Syntax error|Illegal character|unexpected token|Unterminated|This '.*' might be unmatched"
-)
-# Graduate type error scores
-TYPE_ERROR_SCORE_MAP = {
-    0: 0.0,
-    1: 0.20,
-    2: 0.15,
-    3: 0.10,
-    4: 0.05,
-    5: 0.04,
-    6: 0.03,
-    7: 0.025,
-    8: 0.02,
-    9: 0.015,
-}
 
 
-@dataclass
-class RewardResult:
-    """Standardized return type for all reward functions."""
-
-    score: float
-    metadata: Dict[str, Any] = field(default_factory=dict)
-
-
+# ============================================================================
 # Code Extraction Utilities
-
-
-def extract_function_signature(prompt: str) -> Tuple[str, str]:
-    """
-    Extract the function signature and name from an OCaml prompt.
-
-    Prompts typically contain a docstring followed by a function signature:
-        (**Compute the factorial...
-         * >>> factorial 5
-         * 120
-        *)
-        let rec factorial (n : int) : int =
-
-    This function extracts the signature line and the function name.
-
-    Args:
-        prompt: The full prompt text containing docstring and signature
-
-    Returns:
-        A tuple (signature_line, function_name).
-        Example: ("let rec factorial (n : int) : int =", "factorial")
-        Returns ("", "") if not found.
-    """
-    # Scan the last 300 characters to be efficient and avoid false positives
-    # from the middle of the prompt
-    search_text = prompt[-300:]
-    match = FUNC_SIGNATURE_RE.search(search_text)
-    if match:
-        return match.group(0).strip(), match.group("name")
-    return "", ""
-
-
-def prepend_signature(prompt: str, completion: str) -> str:
-    """
-    Prepend the function signature from the prompt to the completion if needed.
-
-    It extracts the signature from the prompt. If the completion does not start
-    with a redefinition of the same function, it prepends the signature.
-
-    Args:
-        prompt: The prompt text
-        completion: The model completion
-
-    Returns:
-        The completion with signature prepended if appropriate.
-    """
-    sig, name = extract_function_signature(prompt)
-    if not sig:
-        return completion
-
-    stripped = completion.strip()
-    if stripped.startswith("let"):
-        # Check for redefinition using regex to handle spacing/rec
-        # Regex: let (rec)? name
-        pattern = re.compile(rf"let\s+(?:rec\s+)?{re.escape(name)}\b")
-        if pattern.match(stripped):
-            return completion
-
-    return f"{sig}\n  {completion}"
+# ============================================================================
 
 
 def extract_code_block(text: str) -> str:
@@ -138,360 +83,76 @@ def extract_code_block(text: str) -> str:
     return text.strip()
 
 
-def count_non_empty_code_lines(code: str) -> int:
+def extract_function_signature(prompt: str) -> Tuple[str, str]:
     """
-    Return non-empty, non-comment OCaml line count for heuristics.
+    Extract the function signature and name from an OCaml prompt.
 
-    Counts lines that are not empty and do not start with OCaml comment syntax.
+    Prompts typically contain a docstring followed by a function signature:
+        (**Compute the factorial...
+         * >>> factorial 5
+         * 120
+        *)
+        let rec factorial (n : int) : int =
 
     Args:
-        code: OCaml code string
+        prompt: The full prompt text containing docstring and signature
 
     Returns:
-        Number of non-empty, non-comment lines
+        A tuple (signature_line, function_name).
+        Example: ("let rec factorial (n : int) : int =", "factorial")
+        Returns ("", "") if not found.
     """
-    count = 0
-    for line in code.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("(*"):
-            continue
-        count += 1
-    return count
+    search_text = prompt[-300:]
+    match = FUNC_SIGNATURE_RE.search(search_text)
+    if match:
+        return match.group(0).strip(), match.group("name")
+    return "", ""
 
 
-# Reward Functions
-
-
-def type_check_reward(source_path: Path, workdir: Path) -> RewardResult:
+def prepend_signature(prompt: str, completion: str) -> str:
     """
-    Run OCaml type check and return graduated score based on error count.
+    Prepend the function signature from the prompt to the completion if needed.
 
-    Score distribution:
-    - 0 errors: 0.25
-    - 1 error:  0.20
-    - 2 errors: 0.15
-    - 3 errors: 0.10
-    - 4 errors: 0.05
-    - 5 errors: 0.04
-    - 6 errors: 0.03
-    - 7 errors: 0.025
-    - 8 errors: 0.02
-    - 9 errors: 0.015
-    - 10+ errors: 0.01
-    - Syntax errors: 0.0
+    It extracts the signature from the prompt. If the completion does not start
+    with a redefinition of the same function, it prepends the signature.
 
     Args:
-        source_path: Path to the .ml source file
-        workdir: Working directory for compilation
+        prompt: The prompt text
+        completion: The model completion
 
     Returns:
-        RewardResult with score and metadata containing: syntax_errors,
-        error_details, has_syntax_error, timed_out
+        The completion with signature prepended if appropriate.
     """
-    try:
-        subprocess.run(
-            ["ocamlc", "-c", source_path.name],
-            cwd=workdir,
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=TYPE_CHECK_TIMEOUT,
-        )
-    except subprocess.TimeoutExpired:
-        return RewardResult(
-            score=0.0,
-            metadata={
-                "syntax_errors": None,
-                "error_details": "[TimeoutExpired] Type check failed",
-                "has_syntax_error": False,
-                "timed_out": True,
-            },
-        )
-    except subprocess.CalledProcessError as exc:
-        # raised when return code is non-zero
-        stderr = exc.stderr or ""
-        has_syntax_error = bool(re.search(SYNTAX_ERROR_RE, stderr, re.IGNORECASE))
-        error_count = len(re.findall(r"\bError:", stderr))
-        score = 0.0
-        msg = ""
+    sig, name = extract_function_signature(prompt)
+    if not sig:
+        return completion
 
-        # Syntax errors get zero reward
-        if has_syntax_error:
-            error_count = 0
-            msg = f"[SYNTAX ERROR] {stderr[:300]}"
-        else:
-            msg = f"[TYPE ERRORS: {error_count}] {stderr[:250]}"
-            score = TYPE_ERROR_SCORE_MAP.get(error_count, 0.01)
+    stripped = completion.strip()
+    if stripped.startswith("let"):
+        pattern = re.compile(rf"let\s+(?:rec\s+)?{re.escape(name)}\b")
+        if pattern.match(stripped):
+            return completion
 
-        return RewardResult(
-            score=score,
-            metadata={
-                "syntax_errors": error_count,
-                "error_details": msg,
-                "has_syntax_error": has_syntax_error,
-                "timed_out": False,
-            },
-        )
-    except Exception as exc:
-        return RewardResult(
-            score=0.0,
-            metadata={
-                "syntax_errors": None,
-                "error_details": f"[{type(exc).__name__}] Type check failed",
-                "has_syntax_error": False,
-                "timed_out": True,
-            },
-        )
-
-    # Check passed
-    return RewardResult(
-        score=0.25,
-        metadata={
-            "syntax_errors": 0,
-            "error_details": "success",
-            "has_syntax_error": False,
-            "timed_out": False,
-        },
-    )
-
-
-def compile_reward(
-    source_path: Path, workdir: Path, output_name: str, type_check: RewardResult
-) -> RewardResult:
-    """
-    Run OCaml compilation and return score based on success and type check state.
-
-    Uses `ocamlc -o` to compile to executable. Provides partial credit based
-    on type check results.
-
-    Scoring:
-    - Compiles successfully: 0.10 (100% of compile reward)
-    - Type checks perfectly but fails to compile: 0.05 (50%)
-    - Has type errors and fails to compile: 0.01 (10%)
-    - Syntax error: 0.0
-
-    Args:
-        source_path: Path to the .ml source file
-        workdir: Working directory for compilation
-        output_name: Name for the output executable
-        type_check: RewardResult from type_check_reward()
-
-    Returns:
-        RewardResult with score and metadata containing: timed_out
-    """
-    if type_check.metadata.get("timed_out"):
-        return RewardResult(score=0.0, metadata={"timed_out": True})
-
-    try:
-        result = subprocess.run(
-            ["ocamlc", "-o", output_name, source_path.name],
-            cwd=workdir,
-            capture_output=True,
-            text=True,
-            timeout=COMPILE_TIMEOUT,
-        )
-    except subprocess.TimeoutExpired:
-        return RewardResult(score=0.0, metadata={"timed_out": True})
-    except Exception:
-        return RewardResult(score=0.0, metadata={"timed_out": False})
-
-    # Compilation succeeded
-    if result.returncode == 0:
-        return RewardResult(score=0.10, metadata={"timed_out": False})
-    # Perfect type check but compilation failed (linking issues, etc.)
-    elif type_check.score == 0.25:
-        return RewardResult(score=0.05, metadata={"timed_out": False})
-    # Syntax errors get no credit
-    elif type_check.metadata.get("has_syntax_error"):
-        return RewardResult(score=0.0, metadata={"timed_out": False})
-    # Type errors but attempted compilation
-    else:
-        return RewardResult(score=0.01, metadata={"timed_out": False})
-
-
-def tests_reward(workdir: Path, executable_name: str) -> RewardResult:
-    """
-    Run compiled executable and return test score.
-
-    Executes the compiled binary which should contain self-test code.
-    Success is determined by zero exit code.
-
-    Args:
-        workdir: Working directory containing the executable
-        executable_name: Name of the executable file
-
-    Returns:
-        RewardResult with score (0.65 if pass, 0.0 otherwise) and metadata
-        containing: timed_out
-    """
-    try:
-        result = subprocess.run(
-            [f"./{executable_name}"],
-            cwd=workdir,
-            capture_output=True,
-            text=True,
-            timeout=TEST_TIMEOUT,
-        )
-        return RewardResult(
-            score=0.65 if result.returncode == 0 else 0.0,
-            metadata={"timed_out": False},
-        )
-    except subprocess.TimeoutExpired:
-        return RewardResult(score=0.0, metadata={"timed_out": True})
+    return f"{sig}\n  {completion}"
 
 
 # ============================================================================
-# 4. Degenerate Output Detection
+# Reward Orchestration
 # ============================================================================
 
 
-def is_degenerate_output(completion: str, code: str) -> tuple[bool, list[str]]:
+def compute_reward_with_metadata(
+    completion: str, info: Dict[str, Any], state: Dict[str, Any]
+) -> Tuple[float, Dict[str, Any]]:
     """
-    Multi-signal detection for degenerate outputs (prose, gibberish, spam).
-
-    Returns tuple of (is_degenerate, reasons) where reasons lists detected issues.
-    Can be disabled via GRPO_DISABLE_PROSE_PENALTY environment variable.
-
-    This function detects:
-    - Repetitive patterns (spam)
-    - Low code purity (too much wrapper text)
-    - Markdown code block spam (too many ``` markers)
-    - Stub solutions (failwith + "implement" in short code)
-
-    Args:
-        completion: Full completion text
-        code: Extracted code block
-
-    Returns:
-        Tuple of (is_degenerate: bool, reasons: list of detected issues)
-    """
-    if os.environ.get("GRPO_DISABLE_PROSE_PENALTY") == "true":
-        return False, []
-
-    reasons = []
-
-    # Signal 1: Highly repetitive content (spam patterns)
-    if len(completion) > 100:
-        # Check for repeated 50-char chunks
-        chunks = [completion[i : i + 50] for i in range(0, len(completion) - 50, 25)]
-        if chunks:
-            unique_chunks = len(set(chunks))
-            repetition_ratio = unique_chunks / len(chunks) if chunks else 1.0
-
-            if repetition_ratio < 0.3:  # >70% repetition
-                reasons.append("repetitive content")
-
-    # Signal 2: Low code purity (too much wrapper text)
-    if len(code) > 0 and len(completion) > 0:
-        code_purity = len(code) / len(completion)
-
-        if code_purity < 0.5:  # Less than half is actual code
-            reasons.append("low code ratio")
-
-    # Signal 3: Markdown code block spam (too many ``` markers)
-    code_block_count = completion.count("```")
-    # Each code block has 2 markers (opening and closing), so count pairs
-    # Legitimate completions should have at most 1-2 code blocks (2-4 markers)
-    if code_block_count > 4:  # More than 2 code block pairs
-        reasons.append("code block spam")
-
-    # Signal 4: Stub solutions
-    # Detects reward hacking patterns that pass type/compile but aren't real solutions
-    code_lines = count_non_empty_code_lines(code)
-    code_lower = code.lower()
-
-    # Common stub indicators in code or comments
-    stub_indicators = [
-        "placeholder",
-        "replace with",
-        "actual logic",
-        "not implemented",
-        "your code here",
-        "implement this",
-        "implement the",
-    ]
-
-    # Check for stub indicators anywhere in code (including comments)
-    has_stub_indicator = any(ind in code_lower for ind in stub_indicators)
-
-    # OCaml-specific stub patterns
-    has_assert_false = "assert false" in code_lower
-    has_failwith = "failwith" in code_lower
-    has_raise_failure = "raise" in code_lower and "failure" in code_lower
-
-    # Short code with stub indicators is definitely a stub
-    if code_lines < 5 and has_stub_indicator:
-        reasons.append("stub solution (indicator in comment)")
-
-    # Short code with assert false is almost always a placeholder
-    if code_lines < 5 and has_assert_false:
-        reasons.append("stub solution (assert false)")
-
-    # Short code with failwith/raise + stub indicator
-    if code_lines < 5 and (has_failwith or has_raise_failure) and has_stub_indicator:
-        reasons.append("stub solution (exception placeholder)")
-
-    # Very short code with failwith is suspicious even without explicit indicator
-    if code_lines < 3 and has_failwith:
-        reasons.append("stub solution (short failwith)")
-
-    # Require 1+ signals to trigger penalty
-    return len(reasons) >= 1, reasons
-
-
-def compute_solution_style_penalty(completion: str, code: str) -> tuple[float, list[str]]:
-    """
-    Compute small penalty for verbose but correct solutions.
-
-    Only applied when tests pass (base_reward == 1.0). Penalizes:
-    - Multiple code blocks (should be exactly one)
-    - Prose/explanation after the final code block
-
-    Args:
-        completion: Full completion text
-        code: Extracted code block
-
-    Returns:
-        Tuple of (penalty: 0.0-0.10, reasons: list of detected issues)
-    """
-    reasons = []
-    penalty = 0.0
-
-    # Check 1: Multiple code blocks (ideal is exactly one)
-    code_block_count = len(CODE_BLOCK_RE.findall(completion))
-    if code_block_count > 1:
-        extra_blocks = code_block_count - 1
-        penalty += 0.02 * extra_blocks
-        reasons.append(f"{code_block_count} code blocks")
-
-    # Check 2: Trailing prose after the final code block
-    last_fence = completion.rfind("```")
-    if last_fence != -1:
-        after_code = completion[last_fence + 3 :].strip()
-        if len(after_code) > 30:
-            penalty += 0.03
-            reasons.append("trailing prose")
-
-    # Cap total penalty at 0.10
-    penalty = min(penalty, 0.10)
-
-    return penalty, reasons
-
-
-# ============================================================================
-# 5. Reward Functions
-# ============================================================================
-
-
-def ocaml_reward(completion: str, info: Dict[str, Any], state: Dict[str, Any]) -> float:
-    """
-    Main verifiers rubric function for OCaml code generation.
+    Main verifiers rubric function for OCaml code generation with full metadata.
 
     Implements a graduated reward structure:
     - Type checking: 25% (graduated partial credit for type errors)
     - Compilation: 10% (partial credit based on type check)
     - Tests: 65% (full reward for passing tests)
     - Prose penalty: 0.3x multiplier if degenerate output detected
+    - Style penalty: up to 0.10 for passing solutions with style issues
 
     Args:
         completion: Model's completion text
@@ -501,7 +162,9 @@ def ocaml_reward(completion: str, info: Dict[str, Any], state: Dict[str, Any]) -
                Expected keys: "problem_id" (str)
 
     Returns:
-        Float reward in range [0, 1]
+        Tuple of (score, metadata_dict) where:
+        - score: Float reward in range [0, 1]
+        - metadata_dict: Dictionary with detailed scoring breakdown
     """
     # Extract problem metadata
     problem_id = info.get("problem_id") or state.get("problem_id", "unknown")
@@ -510,7 +173,23 @@ def ocaml_reward(completion: str, info: Dict[str, Any], state: Dict[str, Any]) -
     # Extract and validate code
     code = extract_code_block(completion)
     if not code or count_non_empty_code_lines(code) < MIN_NON_EMPTY_LINES:
-        return 0.0
+        return 0.0, {
+            "problem_id": problem_id,
+            "total_reward": 0.0,
+            "base_reward": 0.0,
+            "type_score": 0.0,
+            "compile_score": 0.0,
+            "test_score": 0.0,
+            "syntax_errors": None,
+            "error_details": None,
+            "is_degenerate": False,
+            "degenerate_reasons": [],
+            "style_penalty": 0.0,
+            "style_reasons": [],
+            "reason": "empty or too short",
+            "timeout_stage": None,
+            "tests_passed": False,
+        }
 
     # Combine solution with test code
     combined_code = f"{code.rstrip()}\n\n{tests.strip()}\n"
@@ -525,25 +204,96 @@ def ocaml_reward(completion: str, info: Dict[str, Any], state: Dict[str, Any]) -
         compile_result = compile_reward(source_path, tmpdir, problem_id, type_check_result)
 
         # Only run tests if compilation succeeded
-        compile_succeeded = compile_result.score == 0.10
+        compile_succeeded = compile_result.score == COMPILE_SUCCESS_SCORE
         test_result = tests_reward(tmpdir, problem_id) if compile_succeeded else RewardResult(0.0)
+
+    # Determine timeout stage
+    timeout_stage = None
+    if type_check_result.metadata.get("timed_out"):
+        timeout_stage = "type_check"
+    elif test_result.metadata.get("timed_out"):
+        timeout_stage = "tests"
 
     # Calculate base reward
     base_reward = type_check_result.score + compile_result.score + test_result.score
 
     # Apply degenerate output penalty
-    is_degenerate, _ = is_degenerate_output(completion, code)
-    total_reward = base_reward * 0.3 if is_degenerate else base_reward
+    is_degen, degen_reasons = is_degenerate_output(completion, code)
+    total_reward = base_reward * DEGENERATE_PENALTY_MULTIPLIER if is_degen else base_reward
 
-    return float(total_reward)
+    # Apply style penalty for passing solutions
+    style_penalty = 0.0
+    style_reasons = []
+    if base_reward == 1.0 and not is_degen:
+        style_penalty, style_reasons = compute_solution_style_penalty(
+            completion, code, CODE_BLOCK_RE
+        )
+        total_reward = total_reward - style_penalty
+
+    # Build reason for reward < 1
+    reason = None
+    if total_reward < 1.0:
+        if style_reasons:
+            reason = "style: " + ", ".join(style_reasons)
+        elif degen_reasons:
+            reason = ", ".join(degen_reasons)
+        elif test_result.score == 0.0 and compile_succeeded:
+            reason = "test failure"
+        elif compile_result.score < COMPILE_SUCCESS_SCORE:
+            if type_check_result.metadata.get("has_syntax_error"):
+                reason = "syntax error"
+            elif type_check_result.score < TYPE_CHECK_MAX_SCORE:
+                reason = "type error"
+            else:
+                reason = "compile failure"
+        elif timeout_stage:
+            reason = f"timeout ({timeout_stage})"
+
+    metadata = {
+        "problem_id": problem_id,
+        "total_reward": float(total_reward),
+        "base_reward": float(base_reward),
+        "type_score": float(type_check_result.score),
+        "compile_score": float(compile_result.score),
+        "test_score": float(test_result.score),
+        "syntax_errors": type_check_result.metadata.get("syntax_errors"),
+        "error_details": type_check_result.metadata.get("error_details"),
+        "is_degenerate": is_degen,
+        "degenerate_reasons": degen_reasons,
+        "style_penalty": float(style_penalty),
+        "style_reasons": style_reasons,
+        "reason": reason,
+        "timeout_stage": timeout_stage,
+        "tests_passed": bool(test_result.score >= TESTS_PASS_SCORE),
+    }
+
+    return float(total_reward), metadata
+
+
+def compute_reward(completion: str, info: Dict[str, Any], state: Dict[str, Any]) -> float:
+    """
+    Main verifiers rubric function for OCaml code generation.
+
+    Convenience wrapper around compute_reward_with_metadata that returns just the score.
+
+    Args:
+        completion: Model's completion text
+        info: Dictionary containing test code and problem metadata
+        state: Dictionary containing problem state
+
+    Returns:
+        Float reward in range [0, 1]
+    """
+    score, _ = compute_reward_with_metadata(completion, info, state)
+    return score
 
 
 # ============================================================================
-# 6. Dataset Loading
+# Dataset Loading
 # ============================================================================
 
 
-def load_ocaml_dataset(dataset_id: str = "kiranpg/ocaml-training-problems") -> Dataset:
+def load_ocaml_dataset(dataset_id: str = "kiranpg/ocaml-training-problems"):
     """
     Load and transform OCaml dataset into verifiers format.
 
@@ -557,6 +307,8 @@ def load_ocaml_dataset(dataset_id: str = "kiranpg/ocaml-training-problems") -> D
     Returns:
         Transformed Dataset compatible with verifiers
     """
+    from datasets import load_dataset
+
     dataset = load_dataset(dataset_id, split="train")
 
     def transform_example(example):
@@ -573,14 +325,14 @@ def load_ocaml_dataset(dataset_id: str = "kiranpg/ocaml-training-problems") -> D
 
 
 # ============================================================================
-# 7. Environment Factory
+# Environment Factory
 # ============================================================================
 
 
 def create_ocaml_env(
     dataset_id: str = "kiranpg/ocaml-training-problems",
     system_prompt: str = "",
-) -> vf.SingleTurnEnv:
+):
     """
     Create a verifiers-compatible environment for OCaml code generation.
 
@@ -591,19 +343,18 @@ def create_ocaml_env(
 
     Args:
         dataset_id: HuggingFace dataset identifier
-        system_prompt: System prompt for the model (default empty,
-                      as prompts are in the dataset)
+        system_prompt: System prompt for the model (default empty)
 
     Returns:
         SingleTurnEnv configured for OCaml code generation
     """
-    # Load and transform dataset
+    import verifiers as vf
+
     dataset = load_ocaml_dataset(dataset_id)
 
-    # Create environment with OCaml reward rubric
     env = vf.SingleTurnEnv.create(
         system_prompt=system_prompt,
-        rubric=[ocaml_reward],
+        rubric=[compute_reward],
         dataset=dataset,
     )
 
@@ -615,22 +366,16 @@ def create_ocaml_env(
 # ============================================================================
 
 __all__ = [
-    # Data types
-    "RewardResult",
+    # Constants
+    "CODE_BLOCK_RE",
+    "DEGENERATE_PENALTY_MULTIPLIER",
     # Code extraction
     "extract_code_block",
     "extract_function_signature",
     "prepend_signature",
-    "count_non_empty_code_lines",
-    # Compilation functions
-    "type_check_reward",
-    "compile_reward",
-    "tests_reward",
-    # Degenerate and style detection
-    "is_degenerate_output",
-    "compute_solution_style_penalty",
-    # Reward function
-    "ocaml_reward",
+    # Reward orchestration
+    "compute_reward_with_metadata",
+    "compute_reward",
     # Dataset and environment
     "load_ocaml_dataset",
     "create_ocaml_env",
