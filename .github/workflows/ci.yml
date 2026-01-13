@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch full history for diff comparison
+
+      - name: Install OCaml
+        run: sudo apt-get update && sudo apt-get install -y ocaml
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Get changed Python files
+        id: changed-files
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            # For PRs, compare against the base branch
+            git diff --name-only --diff-filter=ACMR "origin/${{ github.base_ref }}...HEAD" -- '*.py' > changed_files.txt
+          else
+            # For pushes, compare against the previous commit
+            git diff --name-only --diff-filter=ACMR HEAD~1...HEAD -- '*.py' > changed_files.txt
+          fi
+          if [ -s changed_files.txt ]; then
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+            echo "Changed Python files:"
+            cat changed_files.txt
+          else
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            echo "No Python files changed"
+          fi
+
+      - name: Run ruff check on changed files
+        if: steps.changed-files.outputs.has_changes == 'true'
+        run: xargs -r uv run ruff check < changed_files.txt
+
+      - name: Run tests
+        run: uv run pytest -v
