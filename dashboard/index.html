@@ -5,33 +5,38 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>GRPO Training Dashboard</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&display=swap" rel="stylesheet">
     <style>
         :root {
-            --bg-color: #0f0f1a;
-            --text-color: #e0e0e0;
-            --card-bg: #1a1a2e;
-            --subtitle-color: #888;
-            --chart-title-color: #fff;
-            --grid-color: #333;
-            --tick-color: #888;
-            --accent-cyan: #22d3d1;
-            --accent-pink: #f472b6;
-            --accent-purple: #a78bfa;
+            /* Catppuccin Mocha */
+            --bg-color: #1e1e2e;
+            --text-color: #cdd6f4;
+            --card-bg: #313244;
+            --subtitle-color: #a6adc8;
+            --chart-title-color: #cdd6f4;
+            --grid-color: #45475a;
+            --tick-color: #a6adc8;
+            --accent-teal: #94e2d5;
+            --accent-pink: #f5c2e7;
+            --accent-mauve: #cba6f7;
         }
 
         [data-theme="light"] {
-            --bg-color: #f3f4f6;
-            --text-color: #1f2937;
-            --card-bg: #ffffff;
-            --subtitle-color: #6b7280;
-            --chart-title-color: #111827;
-            --grid-color: #e5e7eb;
-            --tick-color: #6b7280;
+            /* Catppuccin Latte */
+            --bg-color: #eff1f5;
+            --text-color: #4c4f69;
+            --card-bg: #e6e9ef;
+            --subtitle-color: #6c6f85;
+            --chart-title-color: #4c4f69;
+            --grid-color: #ccd0da;
+            --tick-color: #6c6f85;
         }
 
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-family: 'Google Sans', sans-serif;
             background: var(--bg-color);
             color: var(--text-color);
             padding: 20px;
@@ -72,9 +77,11 @@
             color: var(--text-color);
             height: 40px;
             padding: 0 14px;
-            border-radius: 10px;
+            border-radius: 7px;
             text-decoration: none;
             font-size: 0.9rem;
+            font-weight: bold;
+            text-transform: uppercase;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -106,20 +113,30 @@
             max-width: 1800px;
             margin: 0 auto;
         }
+        .chart-card.full-width {
+            grid-column: 1 / -1;
+        }
+        .two-col-row {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 20px;
+            max-width: 1800px;
+            margin: 20px auto 0 auto;
+        }
+        @media (max-width: 900px) {
+            .two-col-row {
+                grid-template-columns: 1fr;
+            }
+        }
         .chart-card {
             background: var(--card-bg);
             border-radius: 16px;
             padding: 24px;
             box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-            transition: all 0.3s ease;
-        }
-        .chart-card:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 8px 16px rgba(0, 0, 0, 0.15);
         }
         .chart-title {
-            font-size: 1rem;
-            font-weight: 500;
+            font-size: 1.2rem;
+            font-weight: bold;
             margin-bottom: 12px;
             color: var(--chart-title-color);
         }
@@ -143,7 +160,7 @@
             text-align: center;
         }
         .metric-label {
-            font-size: 0.9rem;
+            font-size: 1.6rem;
             color: var(--subtitle-color);
             margin-bottom: 8px;
             text-transform: uppercase;
@@ -153,13 +170,13 @@
             font-size: 3.5rem;
             font-weight: 700;
             margin: 12px 0;
-            color: var(--accent-cyan);
             line-height: 1;
         }
         .metric-trend {
             font-size: 0.85rem;
             color: var(--subtitle-color);
             margin-top: 8px;
+            letter-spacing: 1.2px;
         }
         .metric-sublabel {
             font-size: 0.85rem;
@@ -201,7 +218,7 @@
         .params-table {
             width: 100%;
             border-collapse: collapse;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-family: 'Google Sans', sans-serif;
             font-size: 0.9rem;
         }
         .params-table td {
@@ -255,13 +272,13 @@
         </div>
 
         <div class="metric-card">
-            <div class="metric-label">Latest Reward</div>
+            <div class="metric-label">Last Epoch Reward</div>
             <div class="metric-value" id="metricReward">0.000</div>
             <div class="metric-sublabel">Mean reward value</div>
         </div>
 
         <div class="metric-card">
-            <div class="metric-label">Zero Std Fraction</div>
+            <div class="metric-label">Last Epoch Zero Std</div>
             <div class="metric-progress-container">
                 <canvas id="fracZeroProgress" width="120" height="120"></canvas>
             </div>
@@ -270,64 +287,82 @@
 
     <div class="grid">
         <div class="chart-card">
-            <div class="chart-title">Loss</div>
+            <div class="chart-title">LOSS</div>
             <canvas id="lossChart"></canvas>
         </div>
         <div class="chart-card">
-            <div class="chart-title">Gradient Norm</div>
+            <div class="chart-title">GRADIENT NORM</div>
             <canvas id="gradChart"></canvas>
         </div>
         <div class="chart-card">
-            <div class="chart-title">Learning Rate</div>
+            <div class="chart-title">LEARNING RATE</div>
             <canvas id="lrChart"></canvas>
         </div>
-        <div class="chart-card">
-            <div class="chart-title">Entropy</div>
-            <canvas id="entropyChart"></canvas>
-        </div>
-        <div class="chart-card">
-            <div class="chart-title">KL Divergence</div>
-            <canvas id="klChart"></canvas>
-        </div>
-        <div class="chart-card">
-            <div class="chart-title">Step Time (seconds)</div>
-            <canvas id="stepTimeChart"></canvas>
-        </div>
-        <div class="chart-card">
-            <div class="chart-title">Mean Completion Length (tokens)</div>
-            <canvas id="meanLengthChart"></canvas>
-        </div>
-        <div class="chart-card">
-            <div class="chart-title">Reward (mean ± std)</div>
+        <div class="chart-card full-width">
+            <div class="chart-title">REWARD (MEAN ± STD)</div>
             <canvas id="rewardChart"></canvas>
         </div>
         <div class="chart-card">
-            <div class="chart-title">Reward Outcomes</div>
+            <div class="chart-title">ENTROPY</div>
+            <canvas id="entropyChart"></canvas>
+        </div>
+        <div class="chart-card">
+            <div class="chart-title">KL DIVERGENCE</div>
+            <canvas id="klChart"></canvas>
+        </div>
+        <div class="chart-card">
+            <div class="chart-title">FRACTION ZERO STD</div>
+            <canvas id="fracZeroChart"></canvas>
+        </div>
+    </div>
+
+    <div class="two-col-row">
+        <div class="chart-card">
+            <div class="chart-title">MEAN COMPLETION LENGTH (TOKENS)</div>
+            <canvas id="meanLengthChart"></canvas>
+        </div>
+        <div class="chart-card">
+            <div class="chart-title">STEP TIME (SECONDS)</div>
+            <canvas id="stepTimeChart"></canvas>
+        </div>
+    </div>
+
+    <div class="two-col-row">
+        <div class="chart-card">
+            <div class="chart-title">REWARD OUTCOMES</div>
             <canvas id="outcomePieChart"></canvas>
         </div>
         <div class="chart-card">
-            <div class="chart-title">Test Pass Rate Distribution</div>
+            <div class="chart-title">TEST PASS RATE DISTRIBUTION</div>
             <canvas id="testPassPieChart"></canvas>
-        </div>
-        <div class="chart-card">
-            <div class="chart-title">Fraction Zero Std</div>
-            <canvas id="fracZeroChart"></canvas>
         </div>
     </div>
 
     <div id="trainingParams" class="params-container" style="display: none;">Loading parameters...</div>
 
     <script>
-        // Color Palette
+        // Catppuccin Mocha Color Palette
         const colorPalette = {
-            cyan: '#22d3d1',
-            pink: '#f472b6',
-            purple: '#a78bfa',
-            green: '#4ade80',
-            blue: '#60a5fa',
-            yellow: '#fbbf24',
-            orange: '#fb923c'
+            rosewater: '#f5e0dc',
+            flamingo: '#f2cdcd',
+            pink: '#f5c2e7',
+            mauve: '#cba6f7',
+            red: '#f38ba8',
+            maroon: '#eba0ac',
+            peach: '#fab387',
+            yellow: '#f9e2af',
+            green: '#a6e3a1',
+            teal: '#94e2d5',
+            sky: '#89dceb',
+            sapphire: '#74c7ec',
+            blue: '#89b4fa',
+            lavender: '#b4befe'
         };
+
+        // Set Chart.js global font defaults
+        Chart.defaults.font.family = "'Google Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+        Chart.defaults.font.size = 12;
+        Chart.defaults.font.weight = 'normal';
 
         // State
         let charts = {};
@@ -360,10 +395,11 @@
         // Chart Helpers
         function getChartColors() {
             const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+            // Use Catppuccin colors for charts
             return {
-                grid: isLight ? '#e5e7eb' : '#333',
-                tick: isLight ? '#6b7280' : '#888',
-                text: isLight ? '#374151' : '#ccc'
+                grid: isLight ? '#ccd0da' : '#45475a',   // Surface 1
+                tick: isLight ? '#6c6f85' : '#a6adc8',   // Subtext 0
+                text: isLight ? '#4c4f69' : '#cdd6f4'    // Text
             };
         }
 
@@ -382,8 +418,22 @@
 
         function formatNumber(value) {
             if (typeof value !== 'number') return value;
-            // Format to max 5 significant digits
-            return parseFloat(value.toPrecision(5));
+            // Format to max 2 decimal places, removing trailing zeros
+            return parseFloat(value.toFixed(2));
+        }
+
+        // Calculate moving average to smooth noisy data
+        function movingAverage(values, windowSize) {
+            if (values.length <= windowSize) return values;
+            const result = [];
+            for (let i = 0; i < values.length; i++) {
+                const start = Math.max(0, i - Math.floor(windowSize / 2));
+                const end = Math.min(values.length, i + Math.ceil(windowSize / 2));
+                const window = values.slice(start, end);
+                const avg = window.reduce((sum, v) => sum + v, 0) / window.length;
+                result.push(avg);
+            }
+            return result;
         }
 
         function getCommonConfig(colors) {
@@ -400,7 +450,7 @@
                         display: false,
                         labels: {
                             font: {
-                                family: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+                                family: 'Google Sans, sans-serif'
                             }
                         }
                     },
@@ -459,11 +509,11 @@
                 epochEl.textContent = 'N/A';
             }
 
-            // Update reward
+            // Update reward (find last non-null, non-zero value)
             const rewardEl = document.getElementById('metricReward');
             if (data.reward_mean && data.reward_mean.length > 0) {
-                const latestReward = data.reward_mean[data.reward_mean.length - 1];
-                rewardEl.textContent = latestReward.toFixed(3);
+                const latestReward = data.reward_mean.filter(v => v !== null && v !== 0).pop();
+                rewardEl.textContent = latestReward !== undefined ? latestReward.toFixed(3) : 'N/A';
             } else {
                 rewardEl.textContent = 'N/A';
             }
@@ -482,7 +532,7 @@
                 data: {
                     datasets: [{
                         data: [latestValue * 100, 100 - (latestValue * 100)],
-                        backgroundColor: [colorPalette.cyan, 'rgba(255, 255, 255, 0.1)'],
+                        backgroundColor: [colorPalette.teal, 'rgba(255, 255, 255, 0.1)'],
                         borderWidth: 0,
                         cutout: '75%'
                     }]
@@ -500,7 +550,7 @@
                     afterDraw: (chart) => {
                         const {ctx, chartArea: {width, height}} = chart;
                         ctx.save();
-                        ctx.font = 'bold 24px sans-serif';
+                        ctx.font = "bold 24px 'Google Sans', sans-serif";
                         ctx.fillStyle = getChartColors().text;
                         ctx.textAlign = 'center';
                         ctx.textBaseline = 'middle';
@@ -542,19 +592,75 @@
             const config = getCommonConfig(colors);
 
             if (options.logScale) config.scales.y.type = 'logarithmic';
+            if (options.scientificNotation) {
+                config.scales.y.ticks.callback = function(value) {
+                    if (value === 0) return '0';
+                    return value.toExponential(1);
+                };
+            }
+
+            // Helper to get nice log scale bounds
+            function getLogBounds(values) {
+                const positiveValues = values.filter(v => v > 0);
+                if (positiveValues.length === 0) return { min: null, max: null };
+
+                const minVal = Math.min(...positiveValues);
+                const maxVal = Math.max(...positiveValues);
+
+                // Round down to nearest power of 10 for min
+                const minExp = Math.floor(Math.log10(minVal));
+                const logMin = Math.pow(10, minExp);
+
+                // Round up to nearest half-decade (1, 2, 5, 10, 20, 50...) for max
+                const maxExp = Math.floor(Math.log10(maxVal));
+                const maxMantissa = maxVal / Math.pow(10, maxExp);
+                let logMax;
+                if (maxMantissa <= 1) logMax = Math.pow(10, maxExp);
+                else if (maxMantissa <= 2) logMax = 2 * Math.pow(10, maxExp);
+                else if (maxMantissa <= 5) logMax = 5 * Math.pow(10, maxExp);
+                else logMax = Math.pow(10, maxExp + 1);
+
+                return { min: logMin, max: logMax };
+            }
+
+            // Filter out null values and their corresponding epochs
+            // If skipZeros is true, also filter out values at or below zero threshold
+            const ZERO_THRESHOLD = 0.001;
+            const filteredLabels = [];
+            let filteredValues = [];
+            for (let i = 0; i < data.epochs.length; i++) {
+                const value = data.values[i];
+                if (value !== null && (!options.skipZeros || value > ZERO_THRESHOLD)) {
+                    filteredLabels.push(data.epochs[i]);
+                    filteredValues.push(value);
+                }
+            }
+
+            // Apply moving average smoothing if specified
+            if (options.smoothWindow && options.smoothWindow > 1) {
+                filteredValues = movingAverage(filteredValues, options.smoothWindow);
+            }
+
+            // Set appropriate Y-axis bounds for log scale charts
+            if (options.logScale && filteredValues.length > 0) {
+                const bounds = getLogBounds(filteredValues);
+                if (bounds.min !== null) config.scales.y.min = bounds.min;
+                if (bounds.max !== null) config.scales.y.max = bounds.max;
+            }
 
             charts[canvasId] = new Chart(ctx, {
                 type: 'line',
                 data: {
-                    labels: data.epochs,
+                    labels: filteredLabels,
                     datasets: [{
                         label: label,
-                        data: data.values,
+                        data: filteredValues,
                         borderColor: color,
+                        backgroundColor: options.skipZeros ? 'transparent' : undefined,
                         fill: false,
-                        borderWidth: 3,
+                        borderWidth: 2,
                         pointRadius: 0,
-                        tension: 0.4
+                        tension: options.skipZeros ? 0.3 : 0.4
                     }]
                 },
                 options: config
@@ -571,26 +677,39 @@
                 labels: {
                     color: colors.text,
                     font: {
-                        family: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+                        family: 'Google Sans, sans-serif'
                     }
                 }
             };
 
+            // Filter out null values
+            const filtered = data.epochs.reduce((acc, epoch, i) => {
+                if (data.reward_mean[i] !== null && data.reward_std[i] !== null) {
+                    acc.epochs.push(epoch);
+                    acc.reward_mean.push(data.reward_mean[i]);
+                    acc.reward_std.push(data.reward_std[i]);
+                }
+                return acc;
+            }, { epochs: [], reward_mean: [], reward_std: [] });
+
             // Create upper and lower bounds for the standard deviation area
-            const rewardUpper = data.reward_mean.map((v, i) => v + data.reward_std[i]);
-            const rewardLower = data.reward_mean.map((v, i) => v - data.reward_std[i]);
+            const rewardUpper = filtered.reward_mean.map((v, i) => v + filtered.reward_std[i]);
+            const rewardLower = filtered.reward_mean.map((v, i) => v - filtered.reward_std[i]);
+
+            // Set y-axis to start from 0
+            config.scales.y.min = 0;
 
             charts[canvasId] = new Chart(ctx, {
                 type: 'line',
                 data: {
-                    labels: data.epochs,
+                    labels: filtered.epochs,
                     datasets: [
                         {
                             label: 'Reward',
-                            data: data.reward_mean,
+                            data: filtered.reward_mean,
                             borderColor: colorPalette.green,
                             backgroundColor: colorPalette.green,
-                            borderWidth: 3,
+                            borderWidth: 2,
                             pointRadius: 0,
                             tension: 0.4,
                             zIndex: 10
@@ -638,7 +757,7 @@
                 'Syntax Errors': colorPalette.pink,
                 'Type Errors': colorPalette.blue,
                 'Compile Errors': colorPalette.yellow,
-                'Execution Failures': colorPalette.orange,
+                'Execution Failures': colorPalette.peach,
                 'Success': colorPalette.green
             };
 
@@ -679,7 +798,7 @@
                             labels: {
                                 color: colors.text,
                                 font: {
-                                    family: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+                                    family: 'Google Sans, sans-serif'
                                 }
                             }
                         },
@@ -712,14 +831,14 @@
             const values = [];
             const bgColors = [];
 
-            // Color gradient from red (0%) to green (100%)
+            // Color gradient from red (0%) to green (100%) - Catppuccin colors
             const colorMap = {
-                '0%': '#ef4444',      // red
-                '1-25%': '#f97316',   // orange
-                '26-50%': '#eab308',  // yellow
-                '51-75%': '#84cc16',  // lime
-                '76-99%': '#22c55e',  // green
-                '100%': '#10b981'     // emerald
+                '0%': '#f38ba8',      // red
+                '1-25%': '#fab387',   // peach
+                '26-50%': '#f9e2af',  // yellow
+                '51-75%': '#94e2d5',  // teal
+                '76-99%': '#89b4fa',  // blue
+                '100%': '#a6e3a1'     // green
             };
 
             // Order matters for display
@@ -757,7 +876,7 @@
                             labels: {
                                 color: colors.text,
                                 font: {
-                                    family: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+                                    family: 'Google Sans, sans-serif'
                                 }
                             }
                         },
@@ -777,25 +896,27 @@
         }
 
         function renderCharts(data) {
-            renderChart('lossChart', { epochs: data.epochs, values: data.loss }, 'Loss', colorPalette.pink);
-            renderChart('gradChart', { epochs: data.epochs, values: data.grad }, 'Grad', colorPalette.orange);
-            renderChart('lrChart', { epochs: data.epochs, values: data.lr }, 'LR', colorPalette.purple, { logScale: true });
-            renderChart('entropyChart', { epochs: data.epochs, values: data.entropy }, 'Entropy', colorPalette.cyan);
+            renderChart('lossChart', { epochs: data.epochs, values: data.loss }, 'Loss', colorPalette.red);
+            renderChart('gradChart', { epochs: data.epochs, values: data.grad }, 'Grad', colorPalette.peach);
+            renderChart('lrChart', { epochs: data.epochs, values: data.lr }, 'LR', colorPalette.mauve, { logScale: true, scientificNotation: true });
+            renderChart('entropyChart', { epochs: data.epochs, values: data.entropy }, 'Entropy', colorPalette.lavender);
             renderChart('klChart', { epochs: data.epochs, values: data.kl }, 'KL Divergence', colorPalette.pink);
-            renderChart('stepTimeChart', { epochs: data.epochs, values: data.step_time }, 'Step Time', colorPalette.purple);
+            renderChart('stepTimeChart', { epochs: data.epochs, values: data.step_time }, 'Step Time', colorPalette.sapphire);
             renderChart('meanLengthChart', { epochs: data.epochs, values: data.mean_length }, 'Mean Length', colorPalette.green);
             renderRewardChart('rewardChart', data);
-            renderChart('fracZeroChart', { epochs: data.epochs, values: data.frac_zero_std }, 'Frac Zero Std', colorPalette.cyan);
+            renderChart('fracZeroChart', { epochs: data.epochs, values: data.frac_zero_std }, 'Frac Zero Std', colorPalette.teal, { skipZeros: true, smoothWindow: 20 });
             renderOutcomePieChart('outcomePieChart', data.error_metrics);
             renderTestPassPieChart('testPassPieChart', data.error_metrics);
 
             // Render metric cards
             renderMetricCards(data);
 
-            // Render circular progress for Fraction Zero Std
+            // Render circular progress for Fraction Zero Std (find last non-null, non-zero value)
             if (data.frac_zero_std && data.frac_zero_std.length > 0) {
-                const latestFracZero = data.frac_zero_std[data.frac_zero_std.length - 1];
-                renderFracZeroProgress('fracZeroProgress', latestFracZero);
+                const latestFracZero = data.frac_zero_std.filter(v => v !== null && v > 0.001).pop();
+                if (latestFracZero !== undefined) {
+                    renderFracZeroProgress('fracZeroProgress', latestFracZero);
+                }
             }
         }
 

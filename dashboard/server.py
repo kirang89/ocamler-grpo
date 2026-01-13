@@ -162,9 +162,10 @@ def parse_grpo_metrics(metrics_path):
                 if epoch is None:
                     continue
 
-                # Required fields - use 0 as default
+                # Required fields - only append if present (don't default to 0)
                 for key in _REQUIRED_KEYS:
-                    epoch_data[epoch][key].append(entry.get(key, 0))
+                    if entry.get(key) is not None:
+                        epoch_data[epoch][key].append(entry[key])
 
                 # Optional fields - only append if present
                 for key in _OPTIONAL_KEYS:
@@ -176,7 +177,7 @@ def parse_grpo_metrics(metrics_path):
         return {"epochs": [], "error": "Metrics file not found"}
 
     def mean(lst):
-        return sum(lst) / len(lst) if lst else 0
+        return sum(lst) / len(lst) if lst else None
 
     sorted_epochs = sorted(epoch_data.keys())
 
