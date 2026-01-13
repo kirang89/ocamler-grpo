@@ -12,11 +12,15 @@ import pytest
 
 from rlvr.environment import (
     compute_reward,
+    compute_reward_with_metadata,
     extract_code_block,
     extract_function_signature,
     prepend_signature,
 )
 from rlvr.reward import (
+    COMPILE_SUCCESS_SCORE,
+    TESTS_PASS_SCORE,
+    TYPE_CHECK_MAX_SCORE,
     compile_reward,
     count_non_empty_code_lines,
     is_degenerate_output,
@@ -702,6 +706,203 @@ class TestRewardInterface:
         # Should not crash, should use empty string for tests
         reward = compute_reward(completion, info, state)
         assert isinstance(reward, float)
+
+
+# ============================================================================
+# Metadata Structure Tests
+# ============================================================================
+
+
+@pytest.mark.skipif(not shutil.which("ocamlc"), reason="OCaml not installed")
+class TestComputeRewardMetadata:
+    """Tests for compute_reward_with_metadata return structure."""
+
+    def test_metadata_has_all_required_keys(self):
+        """Test that metadata contains all expected keys."""
+        completion = """```ocaml
+let add x y = x + y
+let sub x y = x - y
+```"""
+        info = {"tests": "let () = assert (add 1 2 = 3)", "problem_id": "test_meta"}
+        state = {"problem_id": "test_meta"}
+
+        score, metadata = compute_reward_with_metadata(completion, info, state)
+
+        required_keys = [
+            "problem_id",
+            "total_reward",
+            "base_reward",
+            "type_score",
+            "compile_score",
+            "test_score",
+            "syntax_errors",
+            "error_details",
+            "is_degenerate",
+            "degenerate_reasons",
+            "style_penalty",
+            "style_reasons",
+            "reason",
+            "timeout_stage",
+            "tests_passed",
+        ]
+
+        for key in required_keys:
+            assert key in metadata, f"Missing key: {key}"
+
+    def test_metadata_types_are_correct(self):
+        """Test that metadata values have correct types."""
+        completion = """```ocaml
+let add x y = x + y
+let sub x y = x - y
+```"""
+        info = {"tests": "let () = assert (add 1 2 = 3)", "problem_id": "test_types"}
+        state = {"problem_id": "test_types"}
+
+        score, metadata = compute_reward_with_metadata(completion, info, state)
+
+        assert isinstance(metadata["problem_id"], str)
+        assert isinstance(metadata["total_reward"], float)
+        assert isinstance(metadata["base_reward"], float)
+        assert isinstance(metadata["type_score"], float)
+        assert isinstance(metadata["compile_score"], float)
+        assert isinstance(metadata["test_score"], float)
+        assert isinstance(metadata["is_degenerate"], bool)
+        assert isinstance(metadata["degenerate_reasons"], list)
+        assert isinstance(metadata["style_penalty"], float)
+        assert isinstance(metadata["style_reasons"], list)
+        assert isinstance(metadata["tests_passed"], bool)
+        # reason and timeout_stage can be None or str
+        assert metadata["reason"] is None or isinstance(metadata["reason"], str)
+        assert metadata["timeout_stage"] is None or isinstance(metadata["timeout_stage"], str)
+
+    def test_metadata_score_matches_return_value(self):
+        """Test that metadata total_reward matches returned score."""
+        completion = """```ocaml
+let add x y = x + y
+let sub x y = x - y
+```"""
+        info = {"tests": "let () = assert (add 1 2 = 3)", "problem_id": "test_match"}
+        state = {"problem_id": "test_match"}
+
+        score, metadata = compute_reward_with_metadata(completion, info, state)
+
+        assert score == metadata["total_reward"]
+
+    def test_metadata_tests_passed_flag_correct(self):
+        """Test that tests_passed flag reflects test success."""
+        # Perfect solution - should pass
+        passing = """```ocaml
+let add x y = x + y
+let sub x y = x - y
+```"""
+        info = {"tests": "let () = assert (add 1 2 = 3)", "problem_id": "test_pass"}
+
+        _, metadata = compute_reward_with_metadata(passing, info, {})
+        assert metadata["tests_passed"] is True
+
+        # Failing solution - should not pass
+        failing = """```ocaml
+let add x y = x - y
+let sub x y = x + y
+```"""
+        _, metadata = compute_reward_with_metadata(failing, info, {})
+        assert metadata["tests_passed"] is False
+
+
+# ============================================================================
+# Score Weights Tests
+# ============================================================================
+
+
+class TestScoreWeights:
+    """Tests for reward score weight constants."""
+
+    def test_weights_sum_to_one(self):
+        """Test that score weights sum to exactly 1.0."""
+        total = TYPE_CHECK_MAX_SCORE + COMPILE_SUCCESS_SCORE + TESTS_PASS_SCORE
+        assert total == 1.0, f"Weights sum to {total}, expected 1.0"
+
+    def test_individual_weights_correct(self):
+        """Test individual weight values."""
+        assert TYPE_CHECK_MAX_SCORE == 0.25
+        assert COMPILE_SUCCESS_SCORE == 0.10
+        assert TESTS_PASS_SCORE == 0.65
+
+    @pytest.mark.skipif(not shutil.which("ocamlc"), reason="OCaml not installed")
+    def test_perfect_solution_achieves_max_score(self):
+        """Test that a perfect solution gets exactly 1.0 reward."""
+        completion = """```ocaml
+let add x y = x + y
+let sub x y = x - y
+```"""
+        info = {"tests": "let () = assert (add 1 2 = 3)", "problem_id": "test_perfect"}
+
+        _, metadata = compute_reward_with_metadata(completion, info, {})
+
+        assert metadata["type_score"] == TYPE_CHECK_MAX_SCORE
+        assert metadata["compile_score"] == COMPILE_SUCCESS_SCORE
+        assert metadata["test_score"] == TESTS_PASS_SCORE
+        assert metadata["total_reward"] == 1.0
+
+
+# ============================================================================
+# Timeout Behavior Tests
+# ============================================================================
+
+
+@pytest.mark.skipif(not shutil.which("ocamlc"), reason="OCaml not installed")
+class TestTimeoutBehavior:
+    """Tests for timeout handling in reward functions."""
+
+    def test_infinite_loop_times_out(self):
+        """Test that code with infinite loop times out during test execution."""
+        # This code compiles but runs forever
+        completion = """```ocaml
+let rec infinite () = infinite ()
+let add x y = infinite (); x + y
+```"""
+        info = {
+            "tests": "let () = assert (add 1 2 = 3)",
+            "problem_id": "test_infinite",
+        }
+
+        score, metadata = compute_reward_with_metadata(completion, info, {})
+
+        # Should timeout during test execution
+        # Gets type_check + compile but no test score
+        assert metadata["type_score"] == TYPE_CHECK_MAX_SCORE
+        assert metadata["compile_score"] == COMPILE_SUCCESS_SCORE
+        assert metadata["test_score"] == 0.0
+        assert metadata["timeout_stage"] == "tests"
+        assert score < 1.0
+
+    def test_timeout_metadata_populated(self):
+        """Test that timeout_stage is set correctly on timeout."""
+        # Infinite recursion that will timeout
+        completion = """```ocaml
+let rec loop n = loop (n + 1)
+let x = loop 0
+```"""
+        info = {"tests": "let () = ()", "problem_id": "test_timeout_meta"}
+
+        _, metadata = compute_reward_with_metadata(completion, info, {})
+
+        # This should timeout during tests (if it compiles)
+        # or fail to compile due to infinite loop at module level
+        if metadata["compile_score"] > 0:
+            assert metadata["timeout_stage"] == "tests"
+
+    def test_non_timeout_has_none_timeout_stage(self):
+        """Test that timeout_stage is None for non-timeout completions."""
+        completion = """```ocaml
+let add x y = x + y
+let sub x y = x - y
+```"""
+        info = {"tests": "let () = assert (add 1 2 = 3)", "problem_id": "test_no_timeout"}
+
+        _, metadata = compute_reward_with_metadata(completion, info, {})
+
+        assert metadata["timeout_stage"] is None
 
 
 if __name__ == "__main__":

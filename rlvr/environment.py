@@ -187,7 +187,7 @@ def compute_reward_with_metadata(
             "style_reasons": [],
             "reason": "empty or too short",
             "timeout_stage": None,
-            "passed": False,
+            "tests_passed": False,
         }
 
     # Combine solution with test code
@@ -263,7 +263,7 @@ def compute_reward_with_metadata(
         "style_reasons": style_reasons,
         "reason": reason,
         "timeout_stage": timeout_stage,
-        "passed": bool(test_result.score >= TESTS_PASS_SCORE),
+        "tests_passed": bool(test_result.score >= TESTS_PASS_SCORE),
     }
 
     return float(total_reward), metadata
