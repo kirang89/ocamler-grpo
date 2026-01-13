@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch full history for diff comparison
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v27
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Get changed Python files
+        id: changed-files
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            # For PRs, compare against the base branch
+            git diff --name-only --diff-filter=ACMR "origin/${{ github.base_ref }}...HEAD" -- '*.py' > changed_files.txt
+          else
+            # For pushes, compare against the previous commit
+            git diff --name-only --diff-filter=ACMR HEAD~1...HEAD -- '*.py' > changed_files.txt
+          fi
+          if [ -s changed_files.txt ]; then
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+            echo "Changed Python files:"
+            cat changed_files.txt
+          else
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            echo "No Python files changed"
+          fi
+
+      - name: Run ruff check on changed files
+        if: steps.changed-files.outputs.has_changes == 'true'
+        run: |
+          nix develop --command bash -c '
+            export UV_AUTO_SYNC_DISABLED=1
+            uv sync --frozen
+            xargs -r uv run ruff check < changed_files.txt
+          '
+
+      - name: Run tests
+        run: |
+          nix develop --command bash -c "
+            export UV_AUTO_SYNC_DISABLED=1
+            uv sync --frozen
+            uv run pytest -v
+          "
