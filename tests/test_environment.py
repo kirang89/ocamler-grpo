@@ -744,7 +744,7 @@ class TestComputeRewardMetadata:
             "style_reasons",
             "reason",
             "timeout_stage",
-            "tests_passed",
+            "have_tests_passed",
         ]
 
         for key in required_keys:
@@ -763,8 +763,8 @@ class TestComputeRewardMetadata:
 
         assert score == metadata["total_reward"]
 
-    def test_metadata_tests_passed_flag_correct(self):
-        """Test that tests_passed flag reflects test success."""
+    def test_metadata_have_tests_passed_flag_correct(self):
+        """Test that have_tests_passed flag reflects test success."""
         # Perfect solution - should pass
         passing = """```ocaml
         let add x y = x + y
@@ -773,7 +773,7 @@ class TestComputeRewardMetadata:
         info = {"tests": "let () = assert (add 1 2 = 3)", "problem_id": "test_pass"}
 
         _, metadata = compute_reward_with_metadata(passing, info, {})
-        assert metadata["tests_passed"] is True
+        assert metadata["have_tests_passed"] is True
 
         # Failing solution - should not pass
         failing = """```ocaml
@@ -781,7 +781,7 @@ class TestComputeRewardMetadata:
         let sub x y = x + y
         ```"""
         _, metadata = compute_reward_with_metadata(failing, info, {})
-        assert metadata["tests_passed"] is False
+        assert metadata["have_tests_passed"] is False
 
 
 # ============================================================================

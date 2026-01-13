@@ -17,7 +17,7 @@ import re
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 # ============================================================================
 # Constants
@@ -30,6 +30,9 @@ TEST_TIMEOUT = 30
 SYNTAX_ERROR_RE = (
     r"Syntax error|Illegal character|unexpected token|Unterminated|This '.*' might be unmatched"
 )
+
+# Pattern to extract per-assertion test results
+TEST_RESULT_PATTERN = re.compile(r"GRPO_TEST_RESULT:(\d+)/(\d+)")
 
 # Graduated type error scores
 TYPE_ERROR_SCORE_MAP = {
@@ -93,6 +96,25 @@ def count_non_empty_code_lines(code: str) -> int:
             continue
         count += 1
     return count
+
+
+def parse_test_results(stdout: str) -> tuple[int, int]:
+    """
+    Parse per-assertion test results from stdout.
+
+    Looks for GRPO_TEST_RESULT:X/Y pattern emitted by transformed tests.
+
+    Args:
+        stdout: Standard output from test execution
+
+    Returns:
+        Tuple of (passed_count, total_count).
+        Returns (0, 0) if pattern not found.
+    """
+    match = TEST_RESULT_PATTERN.search(stdout)
+    if match:
+        return int(match.group(1)), int(match.group(2))
+    return 0, 0
 
 
 # ============================================================================
@@ -218,14 +240,21 @@ def compile_reward(
 
 def tests_reward(workdir: Path, executable_name: str) -> RewardResult:
     """
-    Run compiled executable and return test score.
+    Run compiled executable and return graduated test score.
+
+    Score is TESTS_PASS_SCORE * (passed_assertions / total_assertions).
+    Falls back to binary exit code behavior if no assertion results found.
 
     Args:
         workdir: Working directory containing the executable
         executable_name: Name of the executable file
 
     Returns:
-        RewardResult with score and metadata
+        RewardResult with score and metadata including:
+        - tests_passed: number of passed assertions
+        - tests_total: total number of assertions
+        - pass_rate: passed/total ratio
+        - timed_out: whether execution timed out
     """
     try:
         result = subprocess.run(
@@ -235,12 +264,44 @@ def tests_reward(workdir: Path, executable_name: str) -> RewardResult:
             text=True,
             timeout=TEST_TIMEOUT,
         )
+
+        # Parse per-assertion results
+        passed, total = parse_test_results(result.stdout)
+
+        if total > 0:
+            # Graduated reward based on pass rate
+            pass_rate = passed / total
+            score = TESTS_PASS_SCORE * pass_rate
+        elif result.returncode == 0:
+            # Fallback: all passed (old behavior for non-transformed tests)
+            score = TESTS_PASS_SCORE
+            passed, total = 1, 1
+            pass_rate = 1.0
+        else:
+            # No results and failed
+            score = 0.0
+            passed, total = 0, 1
+            pass_rate = 0.0
+
         return RewardResult(
-            score=TESTS_PASS_SCORE if result.returncode == 0 else 0.0,
-            metadata={"timed_out": False},
+            score=score,
+            metadata={
+                "timed_out": False,
+                "tests_passed": passed,
+                "tests_total": total,
+                "pass_rate": pass_rate,
+            },
         )
     except subprocess.TimeoutExpired:
-        return RewardResult(score=0.0, metadata={"timed_out": True})
+        return RewardResult(
+            score=0.0,
+            metadata={
+                "timed_out": True,
+                "tests_passed": 0,
+                "tests_total": 0,
+                "pass_rate": 0.0,
+            },
+        )
 
 
 # ============================================================================
@@ -365,6 +426,7 @@ __all__ = [
     "TESTS_PASS_SCORE",
     # Utility functions
     "count_non_empty_code_lines",
+    "parse_test_results",
     # Low-level reward functions
     "type_check_reward",
     "compile_reward",

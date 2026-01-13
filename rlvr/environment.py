@@ -20,6 +20,8 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
+import regex
+
 from rlvr.reward import (
     COMPILE_SUCCESS_SCORE,
     MIN_NON_EMPTY_LINES,
@@ -47,6 +49,72 @@ FUNC_SIGNATURE_RE = re.compile(
     r"(?:let|and)\s+(?:rec\s+)?(?P<name>\w+).*?=(?=(?:\s|\\n)*$)",
     re.DOTALL,
 )
+
+
+# ============================================================================
+# Test Transformation for Partial Credit
+# ============================================================================
+
+# Regex pattern for assert with balanced parentheses
+# (?1) recursively matches the first capture group for nested parens
+ASSERT_PATTERN = regex.compile(r"assert\s*(\((?:[^()]*|(?1))*\))\s*;")
+
+
+def transform_tests_for_partial_credit(tests: str) -> str:
+    """
+    Transform OCaml assert statements to capture per-assertion results.
+
+    Wraps each assertion with a counter to track pass rate:
+    - Original: assert (foo 1 = 2);
+    - Transformed: __test (foo 1 = 2);
+
+    This enables graduated test rewards based on how many assertions pass,
+    rather than binary all-or-nothing scoring.
+
+    Args:
+        tests: OCaml test code containing assert statements
+
+    Returns:
+        Transformed test code with counters and result printing.
+        Returns original if no assertions found.
+    """
+    matches = list(ASSERT_PATTERN.finditer(tests))
+
+    if not matches:
+        return tests
+
+    # Header with test helper
+    header = """let __passed = ref 0
+    let __total = ref 0
+    let __test cond = incr __total; if cond then incr __passed
+
+    """
+
+    # Build transformed string by replacing assert statements
+    result = []
+    prev_end = 0
+    for match in matches:
+        result.append(tests[prev_end : match.start()])
+        result.append(f"__test {match.group(1)};")
+        prev_end = match.end()
+    result.append(tests[prev_end:])
+    transformed = "".join(result)
+
+    # Find the final ;; and insert result printing before it
+    if ";;" in transformed:
+        last_idx = transformed.rfind(";;")
+        before = transformed[:last_idx].rstrip()
+        # Ensure previous statement is terminated with semicolon
+        if before and not before.endswith(";"):
+            before += ";"
+        # Use Printf as expression (not let binding) to work inside let () = ... blocks
+        transformed = (
+            before
+            + '\nPrintf.printf "GRPO_TEST_RESULT:%d/%d\\n" !__passed !__total;;'
+            + transformed[last_idx + 2 :]
+        )
+
+    return header + transformed
 
 
 # ============================================================================
@@ -170,6 +238,9 @@ def compute_reward_with_metadata(
     problem_id = info.get("problem_id") or state.get("problem_id", "unknown")
     tests = info.get("tests", "")
 
+    # Transform tests for partial credit scoring
+    transformed_tests = transform_tests_for_partial_credit(tests)
+
     # Extract and validate code
     code = extract_code_block(completion)
     if not code or count_non_empty_code_lines(code) < MIN_NON_EMPTY_LINES:
@@ -191,8 +262,8 @@ def compute_reward_with_metadata(
             "tests_passed": False,
         }
 
-    # Combine solution with test code
-    combined_code = f"{code.rstrip()}\n\n{tests.strip()}\n"
+    # Combine solution with transformed test code
+    combined_code = f"{code.rstrip()}\n\n{transformed_tests.strip()}\n"
 
     with tempfile.TemporaryDirectory(prefix=f"{problem_id}_reward_") as tmpdir_str:
         tmpdir = Path(tmpdir_str)
@@ -256,6 +327,9 @@ def compute_reward_with_metadata(
         "type_score": float(type_check_result.score),
         "compile_score": float(compile_result.score),
         "test_score": float(test_result.score),
+        "tests_passed": test_result.metadata.get("tests_passed", 0),
+        "tests_total": test_result.metadata.get("tests_total", 0),
+        "test_pass_rate": test_result.metadata.get("pass_rate", 0.0),
         "syntax_errors": type_check_result.metadata.get("syntax_errors"),
         "error_details": type_check_result.metadata.get("error_details"),
         "is_degenerate": is_degen,
@@ -264,7 +338,7 @@ def compute_reward_with_metadata(
         "style_reasons": style_reasons,
         "reason": reason,
         "timeout_stage": timeout_stage,
-        "tests_passed": bool(test_result.score >= TESTS_PASS_SCORE),
+        "have_tests_passed": bool(test_result.score >= TESTS_PASS_SCORE),
     }
 
     return float(total_reward), metadata
@@ -369,6 +443,8 @@ __all__ = [
     # Constants
     "CODE_BLOCK_RE",
     "DEGENERATE_PENALTY_MULTIPLIER",
+    # Test transformation
+    "transform_tests_for_partial_credit",
     # Code extraction
     "extract_code_block",
     "extract_function_signature",
