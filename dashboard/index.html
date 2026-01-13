@@ -386,6 +386,11 @@
             return {
                 responsive: true,
                 maintainAspectRatio: false,
+                interaction: {
+                    mode: 'nearest',
+                    axis: 'x',
+                    intersect: false
+                },
                 plugins: {
                     legend: {
                         display: false,
@@ -422,6 +427,7 @@
                     y: {
                         ticks: {
                             color: colors.tick,
+                            font: { weight: 'bold' },
                             callback: function(value) {
                                 return formatNumber(value);
                             }

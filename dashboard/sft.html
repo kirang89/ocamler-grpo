@@ -396,6 +396,11 @@
             return {
                 responsive: true,
                 maintainAspectRatio: false,
+                interaction: {
+                    mode: 'nearest',
+                    axis: 'x',
+                    intersect: false
+                },
                 plugins: {
                     legend: { display: false },
                     tooltip: {
@@ -425,6 +430,7 @@
                     y: {
                         ticks: {
                             color: colors.tick,
+                            font: { weight: 'bold' },
                             callback: function(value) {
                                 return formatNumber(value);
                             }
