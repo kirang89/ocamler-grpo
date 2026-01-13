@@ -401,6 +401,7 @@
                         title: { display: true, text: 'Epoch', color: colors.tick },
                         ticks: {
                             color: colors.tick,
+                            maxTicksLimit: 10,
                             callback: function(value, index, ticks) {
                                 return formatNumber(this.getLabelForValue(value));
                             }
