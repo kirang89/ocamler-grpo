@@ -57,6 +57,17 @@ DEFAULT_POOL_SIZE = 4
 # ============================================================================
 
 
+def _score_single(args: tuple) -> Dict[str, Any]:
+    """Score a single completion and return full metadata.
+
+    Defined at module level to be picklable for ProcessPoolExecutor.
+    """
+    pid, completion, tests = args
+    info = {"tests": tests, "problem_id": pid}
+    _, metadata = compute_reward_with_metadata(completion, info, {})
+    return metadata
+
+
 def create_reward_function(
     logger: RewardLogger | None = None,
     parallel: bool = True,
@@ -74,13 +85,6 @@ def create_reward_function(
         Function matching TRL's (prompts, completions, **kwargs) -> List[float]
     """
     actual_pool_size = pool_size or int(os.environ.get("REWARD_POOL_SIZE", DEFAULT_POOL_SIZE))
-
-    def _score_single(args: tuple) -> Dict[str, Any]:
-        """Score a single completion and return full metadata."""
-        pid, completion, tests = args
-        info = {"tests": tests, "problem_id": pid}
-        _, metadata = compute_reward_with_metadata(completion, info, {})
-        return metadata
 
     def _score_parallel(args_list: List[tuple], pool_size: int) -> List[Dict[str, Any]]:
         """Score completions in parallel using a process pool."""
