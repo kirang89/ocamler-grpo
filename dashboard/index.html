@@ -306,6 +306,10 @@
             <canvas id="errorChart"></canvas>
         </div>
         <div class="chart-card">
+            <div class="chart-title">Reward Outcomes</div>
+            <canvas id="outcomePieChart"></canvas>
+        </div>
+        <div class="chart-card">
             <div class="chart-title">Fraction Zero Std</div>
             <canvas id="fracZeroChart"></canvas>
         </div>
@@ -706,6 +710,85 @@
             });
         }
 
+        function renderOutcomePieChart(canvasId, data) {
+            destroyChart(canvasId);
+            if (!data || !data.counts) {
+                return;
+            }
+
+            const ctx = document.getElementById(canvasId).getContext('2d');
+            const colors = getChartColors();
+            const counts = data.counts;
+
+            // Filter out zero values for cleaner display
+            const labels = [];
+            const values = [];
+            const bgColors = [];
+
+            const colorMap = {
+                'Syntax Errors': colorPalette.pink,
+                'Type Errors': colorPalette.blue,
+                'Compile Errors': colorPalette.yellow,
+                'Execution Failures': colorPalette.orange,
+                'Success': colorPalette.green
+            };
+
+            const dataMap = {
+                'Syntax Errors': counts.syntax_errors,
+                'Type Errors': counts.type_errors,
+                'Compile Errors': counts.compile_errors,
+                'Execution Failures': counts.execution_failures,
+                'Success': counts.success
+            };
+
+            for (const [label, value] of Object.entries(dataMap)) {
+                if (value > 0) {
+                    labels.push(label);
+                    values.push(value);
+                    bgColors.push(colorMap[label]);
+                }
+            }
+
+            charts[canvasId] = new Chart(ctx, {
+                type: 'pie',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        data: values,
+                        backgroundColor: bgColors,
+                        borderColor: 'rgba(0, 0, 0, 0.2)',
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: true,
+                            position: 'right',
+                            labels: {
+                                color: colors.text,
+                                font: {
+                                    family: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+                                }
+                            }
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    const total = context.dataset.data.reduce((a, b) => a + b, 0);
+                                    const value = context.raw;
+                                    const pct = ((value / total) * 100).toFixed(1);
+                                    return `${context.label}: ${value} (${pct}%)`;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
         function renderCharts(data) {
             renderChart('lossChart', { epochs: data.epochs, values: data.loss }, 'Loss', colorPalette.pink);
             renderChart('gradChart', { epochs: data.epochs, values: data.grad }, 'Grad', colorPalette.orange);
@@ -717,6 +800,7 @@
             renderRewardChart('rewardChart', data);
             renderChart('fracZeroChart', { epochs: data.epochs, values: data.frac_zero_std }, 'Frac Zero Std', colorPalette.cyan);
             renderErrorChart('errorChart', data.error_metrics);
+            renderOutcomePieChart('outcomePieChart', data.error_metrics);
 
             // Render metric cards
             renderMetricCards(data);

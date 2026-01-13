@@ -355,6 +355,15 @@ def parse_error_log(log_path: str):
         result["execution_failure_rate"].append(round(exec_fail_count / idx * 100, 3))
 
     result["total_entries"] = total_entries
+    # Add final counts for pie chart
+    success_count = total_entries - syntax_count - type_count - compile_count - exec_fail_count
+    result["counts"] = {
+        "syntax_errors": syntax_count,
+        "type_errors": type_count,
+        "compile_errors": compile_count,
+        "execution_failures": exec_fail_count,
+        "success": max(0, success_count),
+    }
     return result
 
 
