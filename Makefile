@@ -1,6 +1,6 @@
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Linux)
-  NIX_CMD := nix develop --impure .#cuda
+  NIX_CMD := nix develop --impure .\#cuda
 else
   NIX_CMD := nix develop
 endif
