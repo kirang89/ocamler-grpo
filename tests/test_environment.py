@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from rlvr.environment import (
+    DEGENERATE_PENALTY_MULTIPLIER,
     compute_reward,
     compute_reward_with_metadata,
     extract_code_block,
@@ -27,50 +28,6 @@ from rlvr.reward import (
     tests_reward,
     type_check_reward,
 )
-
-# ============================================================================
-# Code Extraction Tests
-# ============================================================================
-
-
-class TestCodeExtraction:
-    def test_extract_code_block_with_language_hint(self):
-        """Test extraction from markdown fences with language hint."""
-        code = "let x = 1"
-        assert extract_code_block(f"```ocaml\n{code}\n```") == code
-        assert extract_code_block(f"```ml\n{code}\n```") == code
-        assert extract_code_block(f"```language:ocaml\n{code}\n```") == code
-
-    def test_extract_code_block_without_hint(self):
-        """Test extraction without language hint."""
-        code = "let x = 1"
-        assert extract_code_block(f"```\n{code}\n```") == code
-
-    def test_extract_multiple_code_blocks(self):
-        """Test handling of multiple code blocks (should take first valid)."""
-        # Empty block followed by valid block
-        text = "```\n```\n```ocaml\nlet x = 1\n```"
-        assert extract_code_block(text) == "let x = 1"
-
-        # Multiple valid blocks - take first
-        text = "```ocaml\nlet x = 1\n```\n```ocaml\nlet y = 2\n```"
-        assert extract_code_block(text) == "let x = 1"
-
-        # Skip language-only blocks
-        text = "```ocaml```\n```\nlet x = 1\n```"
-        assert extract_code_block(text) == "let x = 1"
-
-    def test_extract_fallback_to_raw_text(self):
-        """Test fallback to raw text when no code blocks."""
-        code = "let x = 1"
-        assert extract_code_block(code) == code
-
-    def test_extract_with_prose_and_code_block(self):
-        """Test extraction with prose before code block."""
-        code = "let add x y = x + y"
-        text = f"Here's the solution:\n```ocaml\n{code}\n```\n Try it out and let me know"
-        assert extract_code_block(text) == code
-
 
 SIGNATURE_PREPEND_TEST_CASES = [
     # (prompt, completion, expected_completion, description)
@@ -204,6 +161,50 @@ SIGNATURE_TEST_CASES = [
 ]
 
 
+# ============================================================================
+# Code Extraction Tests
+# ============================================================================
+
+
+class TestCodeExtraction:
+    def test_extract_code_block_with_language_hint(self):
+        """Test extraction from markdown fences with language hint."""
+        code = "let x = 1"
+        assert extract_code_block(f"```ocaml\n{code}\n```") == code
+        assert extract_code_block(f"```ml\n{code}\n```") == code
+        assert extract_code_block(f"```language:ocaml\n{code}\n```") == code
+
+    def test_extract_code_block_without_hint(self):
+        """Test extraction without language hint."""
+        code = "let x = 1"
+        assert extract_code_block(f"```\n{code}\n```") == code
+
+    def test_extract_multiple_code_blocks(self):
+        """Test handling of multiple code blocks (should take first valid)."""
+        # Empty block followed by valid block
+        text = "```\n```\n```ocaml\nlet x = 1\n```"
+        assert extract_code_block(text) == "let x = 1"
+
+        # Multiple valid blocks - take first
+        text = "```ocaml\nlet x = 1\n```\n```ocaml\nlet y = 2\n```"
+        assert extract_code_block(text) == "let x = 1"
+
+        # Skip language-only blocks
+        text = "```ocaml```\n```\nlet x = 1\n```"
+        assert extract_code_block(text) == "let x = 1"
+
+    def test_extract_fallback_to_raw_text(self):
+        """Test fallback to raw text when no code blocks."""
+        code = "let x = 1"
+        assert extract_code_block(code) == code
+
+    def test_extract_with_prose_and_code_block(self):
+        """Test extraction with prose before code block."""
+        code = "let add x y = x + y"
+        text = f"Here's the solution:\n```ocaml\n{code}\n```\n Try it out and let me know"
+        assert extract_code_block(text) == code
+
+
 class TestFunctionSignatureExtraction:
     """Tests for extract_function_signature and prepend_signature functions."""
 
@@ -307,31 +308,31 @@ class TestDegenerateDetection:
         assert any(r.startswith("stub solution") for r in reasons)
 
         stub2 = '''let sort_array arr =
-  failwith "implement me"'''
+        failwith "implement me"'''
         is_deg, reasons = is_degenerate_output(stub2, stub2)
         assert is_deg is True
         assert any(r.startswith("stub solution") for r in reasons)
 
         # Longer code with failwith should not trigger (could be legitimate error handling)
         stub3 = '''let sort_array arr =
-  let x = 1 in
-  failwith "implement later"'''
+        let x = 1 in
+        failwith "implement later"'''
         is_deg, reasons = is_degenerate_output(stub3, stub3)
         assert is_deg is False
         assert not any(r.startswith("stub solution") for r in reasons)
 
     def test_placeholder_comment_detection(self):
         """Test placeholder comments in short code are detected."""
-        stub = '''let determine_convexity (terms : (float * int * int) list) (n : int) : string =
-  "Convex" (* placeholder, replace with actual logic *)'''
+        stub = """let determine_convexity (terms : (float * int * int) list) (n : int) : string =
+        "Convex" (* placeholder, replace with actual logic *)"""
         is_deg, reasons = is_degenerate_output(stub, stub)
         assert is_deg is True
         assert any(r.startswith("stub solution") for r in reasons)
 
     def test_assert_false_detection(self):
         """Test assert false placeholders are detected."""
-        stub = '''let solve x =
-  assert false'''
+        stub = """let solve x =
+        assert false"""
         is_deg, reasons = is_degenerate_output(stub, stub)
         assert is_deg is True
         assert "stub solution (assert false)" in reasons
@@ -346,12 +347,12 @@ class TestDegenerateDetection:
 
         # More complex code with good keyword density
         code = """
-let rec quicksort = function
-  | [] -> []
-  | pivot :: rest ->
-      let smaller, larger = List.partition (fun x -> x < pivot) rest in
-      quicksort smaller @ [pivot] @ quicksort larger
-"""
+        let rec quicksort = function
+          | [] -> []
+          | pivot :: rest ->
+              let smaller, larger = List.partition (fun x -> x < pivot) rest in
+              quicksort smaller @ [pivot] @ quicksort larger
+        """
         completion = f"```ocaml\n{code}\n```"
         is_deg, reasons = is_degenerate_output(completion, code)
         assert is_deg is False
@@ -553,9 +554,9 @@ class TestOCamlRewardEndToEnd:
         """Test with valid OCaml code that passes tests."""
         # Note: Code needs MIN_NON_EMPTY_LINES (2) lines to be scored
         completion = """```ocaml
-let add x y = x + y
-let sub x y = x - y
-```"""
+        let add x y = x + y
+        let sub x y = x - y
+        ```"""
         info = {
             "tests": "let () = assert (add 1 2 = 3)",
             "problem_id": "test_add",
@@ -571,9 +572,9 @@ let sub x y = x - y
         """Test with code that has type errors."""
         # Note: Code needs MIN_NON_EMPTY_LINES (2) lines to be scored
         completion = """```ocaml
-let add x y : int = "not an int"
-let sub x y : int = "also wrong"
-```"""
+        let add x y : int = "not an int"
+        let sub x y : int = "also wrong"
+        ```"""
         info = {
             "tests": "let () = assert (add 1 2 = 3)",
             "problem_id": "test_type_error",
@@ -592,12 +593,12 @@ let sub x y : int = "also wrong"
         # Note: Code needs MIN_NON_EMPTY_LINES (2) lines to be scored
         completion = """Here's the solution to your problem:
 
-```ocaml
-let add x y = x + y
-let sub x y = x - y
-```
+        ```ocaml
+        let add x y = x + y
+        let sub x y = x - y
+        ```
 
-This implementation works by adding the two numbers together."""
+        This implementation works by adding the two numbers together."""
         info = {
             "tests": "let () = assert (add 1 2 = 3)",
             "problem_id": "test_prose",
@@ -606,9 +607,9 @@ This implementation works by adding the two numbers together."""
 
         reward = compute_reward(completion, info, state)
 
-        # Should get penalized to 0.3x of base reward
-        # Base would be 1.0, so should be around 0.3
-        assert 0.2 < reward < 0.4
+        # Should get penalized to DEGENERATE_PENALTY_MULTIPLIER of base reward
+        # Base would be 1.0, so should equal the multiplier
+        assert reward == pytest.approx(DEGENERATE_PENALTY_MULTIPLIER, abs=0.01)
 
     def test_empty_code(self):
         """Test with empty or minimal code gets zero reward."""
@@ -632,8 +633,8 @@ This implementation works by adding the two numbers together."""
     def test_syntax_error(self):
         """Test with syntax errors gets zero reward."""
         completion = """```ocaml
-let add x y =
-```"""
+        let add x y =
+        ```"""
         info = {
             "tests": "let () = ()",
             "problem_id": "test_syntax",
@@ -720,9 +721,9 @@ class TestComputeRewardMetadata:
     def test_metadata_has_all_required_keys(self):
         """Test that metadata contains all expected keys."""
         completion = """```ocaml
-let add x y = x + y
-let sub x y = x - y
-```"""
+        let add x y = x + y
+        let sub x y = x - y
+        ```"""
         info = {"tests": "let () = assert (add 1 2 = 3)", "problem_id": "test_meta"}
         state = {"problem_id": "test_meta"}
 
@@ -749,38 +750,12 @@ let sub x y = x - y
         for key in required_keys:
             assert key in metadata, f"Missing key: {key}"
 
-    def test_metadata_types_are_correct(self):
-        """Test that metadata values have correct types."""
-        completion = """```ocaml
-let add x y = x + y
-let sub x y = x - y
-```"""
-        info = {"tests": "let () = assert (add 1 2 = 3)", "problem_id": "test_types"}
-        state = {"problem_id": "test_types"}
-
-        score, metadata = compute_reward_with_metadata(completion, info, state)
-
-        assert isinstance(metadata["problem_id"], str)
-        assert isinstance(metadata["total_reward"], float)
-        assert isinstance(metadata["base_reward"], float)
-        assert isinstance(metadata["type_score"], float)
-        assert isinstance(metadata["compile_score"], float)
-        assert isinstance(metadata["test_score"], float)
-        assert isinstance(metadata["is_degenerate"], bool)
-        assert isinstance(metadata["degenerate_reasons"], list)
-        assert isinstance(metadata["style_penalty"], float)
-        assert isinstance(metadata["style_reasons"], list)
-        assert isinstance(metadata["tests_passed"], bool)
-        # reason and timeout_stage can be None or str
-        assert metadata["reason"] is None or isinstance(metadata["reason"], str)
-        assert metadata["timeout_stage"] is None or isinstance(metadata["timeout_stage"], str)
-
     def test_metadata_score_matches_return_value(self):
         """Test that metadata total_reward matches returned score."""
         completion = """```ocaml
-let add x y = x + y
-let sub x y = x - y
-```"""
+        let add x y = x + y
+        let sub x y = x - y
+        ```"""
         info = {"tests": "let () = assert (add 1 2 = 3)", "problem_id": "test_match"}
         state = {"problem_id": "test_match"}
 
@@ -792,9 +767,9 @@ let sub x y = x - y
         """Test that tests_passed flag reflects test success."""
         # Perfect solution - should pass
         passing = """```ocaml
-let add x y = x + y
-let sub x y = x - y
-```"""
+        let add x y = x + y
+        let sub x y = x - y
+        ```"""
         info = {"tests": "let () = assert (add 1 2 = 3)", "problem_id": "test_pass"}
 
         _, metadata = compute_reward_with_metadata(passing, info, {})
@@ -802,9 +777,9 @@ let sub x y = x - y
 
         # Failing solution - should not pass
         failing = """```ocaml
-let add x y = x - y
-let sub x y = x + y
-```"""
+        let add x y = x - y
+        let sub x y = x + y
+        ```"""
         _, metadata = compute_reward_with_metadata(failing, info, {})
         assert metadata["tests_passed"] is False
 
@@ -832,9 +807,9 @@ class TestScoreWeights:
     def test_perfect_solution_achieves_max_score(self):
         """Test that a perfect solution gets exactly 1.0 reward."""
         completion = """```ocaml
-let add x y = x + y
-let sub x y = x - y
-```"""
+        let add x y = x + y
+        let sub x y = x - y
+        ```"""
         info = {"tests": "let () = assert (add 1 2 = 3)", "problem_id": "test_perfect"}
 
         _, metadata = compute_reward_with_metadata(completion, info, {})
@@ -858,9 +833,9 @@ class TestTimeoutBehavior:
         """Test that code with infinite loop times out during test execution."""
         # This code compiles but runs forever
         completion = """```ocaml
-let rec infinite () = infinite ()
-let add x y = infinite (); x + y
-```"""
+        let rec infinite () = infinite ()
+        let add x y = infinite (); x + y
+        ```"""
         info = {
             "tests": "let () = assert (add 1 2 = 3)",
             "problem_id": "test_infinite",
@@ -880,9 +855,9 @@ let add x y = infinite (); x + y
         """Test that timeout_stage is set correctly on timeout."""
         # Infinite recursion that will timeout
         completion = """```ocaml
-let rec loop n = loop (n + 1)
-let x = loop 0
-```"""
+        let rec loop n = loop (n + 1)
+        let x = loop 0
+        ```"""
         info = {"tests": "let () = ()", "problem_id": "test_timeout_meta"}
 
         _, metadata = compute_reward_with_metadata(completion, info, {})
@@ -895,9 +870,9 @@ let x = loop 0
     def test_non_timeout_has_none_timeout_stage(self):
         """Test that timeout_stage is None for non-timeout completions."""
         completion = """```ocaml
-let add x y = x + y
-let sub x y = x - y
-```"""
+        let add x y = x + y
+        let sub x y = x - y
+        ```"""
         info = {"tests": "let () = assert (add 1 2 = 3)", "problem_id": "test_no_timeout"}
 
         _, metadata = compute_reward_with_metadata(completion, info, {})

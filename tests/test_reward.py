@@ -1,5 +1,6 @@
 """Tests for create_reward_function behavior (TRL adapter)."""
 
+from rlvr.environment import DEGENERATE_PENALTY_MULTIPLIER
 from rlvr.train import create_reward_function
 
 
@@ -95,7 +96,7 @@ class TestDegenerateDetection:
     """Test degenerate output detection and penalty."""
 
     def test_degenerate_output_penalized(self):
-        """Degenerate output (prose + code block) gets 0.3x penalty."""
+        """Degenerate output (prose + code block) gets DEGENERATE_PENALTY_MULTIPLIER penalty."""
         reward_fn = create_reward_function(logger=None, parallel=False)
 
         # Non-degenerate solution
@@ -107,17 +108,17 @@ class TestDegenerateDetection:
 
         # Degenerate with markdown and prose
         degenerate = """Here's the solution:
-```ocaml
-if n <= 1 then 1 else n * factorial (n - 1)
-```
-This uses recursion."""
+        ```ocaml
+        if n <= 1 then 1 else n * factorial (n - 1)
+        ```
+        This uses recursion."""
         rewards_degenerate = reward_fn(
             prompts=["let rec factorial (n : int) : int ="],
             completions=[degenerate],
             tests=["let () = assert (factorial 5 = 120)"],
         )
 
-        # Degenerate should be penalized (0.3x)
+        # Degenerate should be penalized (DEGENERATE_PENALTY_MULTIPLIER)
         assert rewards_degenerate[0] < rewards_clean[0]
 
     def test_stub_solution_penalized(self):
@@ -145,14 +146,14 @@ class TestStylePenalty:
 
         # Same logic but unnecessarily verbose (many let bindings)
         verbose = """
-let result =
-  let base_case = 1 in
-  let check = n <= 1 in
-  let recursive_call = factorial (n - 1) in
-  let multiply = n * recursive_call in
-  if check then base_case else multiply
-in result
-"""
+        let result =
+          let base_case = 1 in
+          let check = n <= 1 in
+          let recursive_call = factorial (n - 1) in
+          let multiply = n * recursive_call in
+          if check then base_case else multiply
+        in result
+        """
 
         rewards_concise = reward_fn(
             prompts=["let rec factorial (n : int) : int ="],
@@ -188,7 +189,7 @@ class TestSignaturePrepending:
         reward_fn = create_reward_function(logger=None, parallel=False)
         # Multi-line to avoid MIN_NON_EMPTY_LINES rejection
         completion = """let foo (x : int) : int =
-  x + 1"""
+        x + 1"""
         rewards = reward_fn(
             prompts=["let foo (x : int) : int ="],
             completions=[completion],

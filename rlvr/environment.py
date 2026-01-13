@@ -40,6 +40,7 @@ from rlvr.reward import (
 
 CODE_BLOCK_RE = re.compile(r"```(.*?)```", re.DOTALL)
 LANGUAGE_HINTS = {"ocaml", "ml", "language:ocaml"}
+DEGENERATE_PENALTY_MULTIPLIER = 0.3
 
 # Pattern to extract function signature from prompt
 FUNC_SIGNATURE_RE = re.compile(
@@ -218,7 +219,7 @@ def compute_reward_with_metadata(
 
     # Apply degenerate output penalty
     is_degen, degen_reasons = is_degenerate_output(completion, code)
-    total_reward = base_reward * 0.3 if is_degen else base_reward
+    total_reward = base_reward * DEGENERATE_PENALTY_MULTIPLIER if is_degen else base_reward
 
     # Apply style penalty for passing solutions
     style_penalty = 0.0
@@ -367,6 +368,7 @@ def create_ocaml_env(
 __all__ = [
     # Constants
     "CODE_BLOCK_RE",
+    "DEGENERATE_PENALTY_MULTIPLIER",
     # Code extraction
     "extract_code_block",
     "extract_function_signature",
