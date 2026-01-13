@@ -302,10 +302,6 @@
             <canvas id="rewardChart"></canvas>
         </div>
         <div class="chart-card">
-            <div class="chart-title">Cumulative Error Breakdown (%)</div>
-            <canvas id="errorChart"></canvas>
-        </div>
-        <div class="chart-card">
             <div class="chart-title">Reward Outcomes</div>
             <canvas id="outcomePieChart"></canvas>
         </div>
@@ -627,89 +623,6 @@
             });
         }
 
-        function renderErrorChart(canvasId, data) {
-            destroyChart(canvasId);
-            if (!data || !data.steps || data.steps.length === 0) {
-                return;
-            }
-
-            const ctx = document.getElementById(canvasId).getContext('2d');
-            const colors = getChartColors();
-            const config = getCommonConfig(colors);
-            config.plugins.legend = {
-                display: true,
-                position: 'top',
-                align: 'center',
-                labels: {
-                    color: colors.text,
-                    font: {
-                        family: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
-                    },
-                    boxWidth: 12,
-                    padding: 10
-                }
-            };
-            config.scales.y.title = {
-                display: true,
-                text: 'Cumulative error rate (%)',
-                color: colors.tick
-            };
-            config.scales.y.suggestedMin = 0;
-            config.scales.y.suggestedMax = 100;
-            config.scales.y.stacked = true;
-            config.scales.x.title = { display: true, text: 'Completion #', color: colors.tick };
-
-            charts[canvasId] = new Chart(ctx, {
-                type: 'line',
-                data: {
-                    labels: data.steps,
-                    datasets: [
-                        {
-                            label: 'Syntax errors',
-                            data: data.syntax_error_rate,
-                            borderColor: colorPalette.pink,
-                            backgroundColor: 'rgba(244, 114, 182, 0.3)',
-                            fill: true,
-                            borderWidth: 2,
-                            pointRadius: 0,
-                            tension: 0.3
-                        },
-                        {
-                            label: 'Type errors',
-                            data: data.type_error_rate,
-                            borderColor: colorPalette.blue,
-                            backgroundColor: 'rgba(96, 165, 250, 0.3)',
-                            fill: true,
-                            borderWidth: 2,
-                            pointRadius: 0,
-                            tension: 0.3
-                        },
-                        {
-                            label: 'Compile errors',
-                            data: data.compile_error_rate,
-                            borderColor: colorPalette.yellow,
-                            backgroundColor: 'rgba(251, 191, 36, 0.3)',
-                            fill: true,
-                            borderWidth: 2,
-                            pointRadius: 0,
-                            tension: 0.3
-                        },
-                        {
-                            label: 'Execution failures',
-                            data: data.execution_failure_rate,
-                            borderColor: colorPalette.orange,
-                            backgroundColor: 'rgba(251, 146, 60, 0.3)',
-                            fill: true,
-                            borderWidth: 2,
-                            pointRadius: 0,
-                            tension: 0.3
-                        }
-                    ]
-                },
-                options: config
-            });
-        }
-
         function renderOutcomePieChart(canvasId, data) {
             destroyChart(canvasId);
             if (!data || !data.counts) {
@@ -799,7 +712,6 @@
             renderChart('meanLengthChart', { epochs: data.epochs, values: data.mean_length }, 'Mean Length', colorPalette.green);
             renderRewardChart('rewardChart', data);
             renderChart('fracZeroChart', { epochs: data.epochs, values: data.frac_zero_std }, 'Frac Zero Std', colorPalette.cyan);
-            renderErrorChart('errorChart', data.error_metrics);
             renderOutcomePieChart('outcomePieChart', data.error_metrics);
 
             // Render metric cards
