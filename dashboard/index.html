@@ -394,6 +394,17 @@
                                 family: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
                             }
                         }
+                    },
+                    tooltip: {
+                        enabled: true,
+                        callbacks: {
+                            title: function(context) {
+                                return 'Epoch: ' + formatNumber(context[0].label);
+                            },
+                            label: function(context) {
+                                return context.dataset.label + ': ' + formatNumber(context.parsed.y);
+                            }
+                        }
                     }
                 },
                 scales: {
