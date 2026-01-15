@@ -132,10 +132,14 @@ def evaluate_solution(pid: str, completion: str, tests: str) -> dict[str, Any]:
     return metadata
 
 
-def read_problems(dataset_id: str) -> list[dict[str, Any]]:
-    """Read problems from HuggingFace dataset."""
-    dataset = load_dataset(dataset_id, split="train")
-    return [dict(row) for row in dataset]
+def read_problems(dataset_id: str, limit: int | None = None) -> list[dict[str, Any]]:
+    """Read problems from HuggingFace dataset, optionally limiting the count."""
+    split = "train"
+    if limit is not None and limit > 0:
+        split = f"train[:{limit}]"
+    dataset = load_dataset(dataset_id, split=split)
+    problems = [dict(row) for row in dataset]
+    return problems
 
 
 def _base_scores(eval_result: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -229,8 +233,14 @@ def process_single_problem(problem: dict[str, Any]) -> tuple[dict[str, Any], dic
     return (
         build_result(pid, difficulty, eval_result, generation_time, completion),
         build_completion(
-            pid, difficulty, problem_text, tests, eval_result,
-            generation_time, completion, full_completion,
+            pid,
+            difficulty,
+            problem_text,
+            tests,
+            eval_result,
+            generation_time,
+            completion,
+            full_completion,
         ),
     )
 
@@ -244,11 +254,11 @@ def print_problem_status(i: int, total: int, pid: str, result: dict[str, Any]) -
         print(f"FAIL (reward={result['total_reward']:.2f}, stage={result['failure_stage']})")
 
 
-def process_dataset(dataset_id: str, limit: int = 0) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Process all problems in the dataset and return (results, completions)."""
-    problems = read_problems(dataset_id)
-    if limit > 0:
-        problems = problems[:limit]
+def process_dataset(
+    dataset_id: str, limit: int | None = None
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Process problems in the dataset (optionally limiting the count)."""
+    problems = read_problems(dataset_id, limit=limit)
     results = []
     completions = []
 
@@ -262,8 +272,16 @@ def process_dataset(dataset_id: str, limit: int = 0) -> tuple[list[dict[str, Any
 
 
 RESULT_FIELDNAMES = [
-    "id", "difficulty", "total_reward", "base_reward", "type_score",
-    "compile_score", "test_score", "failure_stage", "generation_time_sec", "completion_length",
+    "id",
+    "difficulty",
+    "total_reward",
+    "base_reward",
+    "type_score",
+    "compile_score",
+    "test_score",
+    "failure_stage",
+    "generation_time_sec",
+    "completion_length",
 ]
 
 
@@ -312,8 +330,14 @@ def print_summary(results: list[dict[str, Any]]) -> None:
 def main():
     """Main entry point."""
     import argparse
+
     parser = argparse.ArgumentParser(description="Evaluate OCaml code generation")
-    parser.add_argument("--limit", type=int, default=0, help="Limit number of problems (0=all)")
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Limit number of problems to evaluate (omit for all)",
+    )
     args = parser.parse_args()
 
     # Generate output directory with model name and timestamp
@@ -331,7 +355,7 @@ def main():
     print(f"Model: {OPENAI_MODEL}")
     print(f"API URL: {OPENAI_BASE_URL}")
     print(f"Output directory: {run_dir}")
-    if args.limit > 0:
+    if args.limit is not None and args.limit > 0:
         print(f"Limit: {args.limit} problems")
     print("-" * 50)
 
