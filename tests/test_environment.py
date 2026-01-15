@@ -552,7 +552,7 @@ class TestOCamlRewardEndToEnd:
 
     def test_perfect_solution(self):
         """Test with valid OCaml code that passes tests."""
-        # Note: Code needs MIN_NON_EMPTY_LINES (2) lines to be scored
+        # Note: Code needs MIN_NON_EMPTY_LINES (1) lines to be scored
         completion = """```ocaml
         let add x y = x + y
         let sub x y = x - y
@@ -570,7 +570,7 @@ class TestOCamlRewardEndToEnd:
 
     def test_solution_with_type_errors(self):
         """Test with code that has type errors."""
-        # Note: Code needs MIN_NON_EMPTY_LINES (2) lines to be scored
+        # Note: Code needs MIN_NON_EMPTY_LINES (1) lines to be scored
         completion = """```ocaml
         let add x y : int = "not an int"
         let sub x y : int = "also wrong"
@@ -590,7 +590,7 @@ class TestOCamlRewardEndToEnd:
 
     def test_degenerate_output_penalty(self):
         """Test that degenerate output (prose) gets penalized."""
-        # Note: Code needs MIN_NON_EMPTY_LINES (2) lines to be scored
+        # Note: Code needs MIN_NON_EMPTY_LINES (1) lines to be scored
         completion = """Here's the solution to your problem:
 
         ```ocaml
@@ -617,7 +617,6 @@ class TestOCamlRewardEndToEnd:
             "",
             "```ocaml\n```",
             "```ocaml\n\n```",
-            "let x = 1",  # Only 1 line, needs MIN_NON_EMPTY_LINES
         ]
 
         info = {
