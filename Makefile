@@ -35,13 +35,18 @@ test:
 	uv run pytest -v
 
 lint:
-	uv run ruff check .
+	@files=$$(git diff --name-only | grep '\.py$$'); \
+	if [ -n "$$files" ]; then \
+		uv run ruff check $$files; \
+	else \
+		echo "No changed Python files to lint"; \
+	fi
 
 fmt:
 	uv run ruff format .
 
 deps:
-	uv sync
+	uv sync --frozen
 
 help:
 	@printf "Targets:\n"
