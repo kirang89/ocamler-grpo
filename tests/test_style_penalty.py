@@ -2,7 +2,6 @@
 
 import pytest
 
-from rlvr.environment import CODE_BLOCK_RE
 from rlvr.reward import compute_solution_style_penalty
 
 
@@ -94,53 +93,53 @@ class TestStylePenalty:
 
     def test_clean_solution_no_penalty(self):
         """Clean solution with single code block gets no penalty."""
-        penalty, reasons = compute_solution_style_penalty(CLEAN_SOLUTION, CODE, CODE_BLOCK_RE)
+        penalty, reasons = compute_solution_style_penalty(CLEAN_SOLUTION, CODE)
         assert penalty == 0.0
         assert reasons == []
 
     def test_verbose_solution_penalized(self):
         """Verbose solution with multiple blocks and prose gets penalized."""
-        penalty, reasons = compute_solution_style_penalty(VERBOSE_SOLUTION, CODE, CODE_BLOCK_RE)
+        penalty, reasons = compute_solution_style_penalty(VERBOSE_SOLUTION, CODE)
         assert penalty > 0.0
         assert "code blocks" in reasons[0]
         assert "trailing prose" in reasons[1]
 
     def test_very_verbose_solution_penalized(self):
         """Very verbose solution gets higher penalty."""
-        penalty, reasons = compute_solution_style_penalty(VERY_VERBOSE_SOLUTION, CODE, CODE_BLOCK_RE)
+        penalty, reasons = compute_solution_style_penalty(VERY_VERBOSE_SOLUTION, CODE)
         assert penalty > 0.0
         assert "code blocks" in reasons[0]
         assert "trailing prose" in reasons[1]
 
     def test_penalty_capped_at_010(self):
         """Penalty should never exceed 0.10."""
-        penalty, _ = compute_solution_style_penalty(VERY_VERBOSE_SOLUTION, CODE, CODE_BLOCK_RE)
+        penalty, _ = compute_solution_style_penalty(VERY_VERBOSE_SOLUTION, CODE)
         assert penalty <= 0.10
 
     def test_clean_beats_verbose(self):
         """Clean solution should have lower penalty than verbose."""
-        clean_penalty, _ = compute_solution_style_penalty(CLEAN_SOLUTION, CODE, CODE_BLOCK_RE)
-        verbose_penalty, _ = compute_solution_style_penalty(VERBOSE_SOLUTION, CODE, CODE_BLOCK_RE)
+        clean_penalty, _ = compute_solution_style_penalty(CLEAN_SOLUTION, CODE)
+        verbose_penalty, _ = compute_solution_style_penalty(VERBOSE_SOLUTION, CODE)
         assert clean_penalty < verbose_penalty
 
     def test_multiple_code_blocks_penalty(self):
         """Each extra code block adds 0.02 penalty."""
         # 3 code blocks = 2 extra = 0.04 penalty
         completion = "<code>code</code>\n<code>code</code>\n<code>code</code>"
-        penalty, reasons = compute_solution_style_penalty(completion, CODE, CODE_BLOCK_RE)
+        penalty, reasons = compute_solution_style_penalty(completion, CODE)
         assert penalty == pytest.approx(0.04)
         assert "3 code blocks" in reasons[0]
 
     def test_trailing_prose_penalty(self):
         """Trailing prose after code block adds 0.03 penalty."""
         completion = "<code>code</code>\n\nThis is a long explanation that exceeds 30 characters."
-        penalty, reasons = compute_solution_style_penalty(completion, CODE, CODE_BLOCK_RE)
+        penalty, reasons = compute_solution_style_penalty(completion, CODE)
         assert penalty == pytest.approx(0.03)
         assert "trailing prose" in reasons[0]
 
     def test_short_trailing_content_no_penalty(self):
         """Short trailing content (<=30 chars) doesn't trigger penalty."""
         completion = "<code>code</code>\nshort"
-        penalty, reasons = compute_solution_style_penalty(completion, CODE, CODE_BLOCK_RE)
+        penalty, reasons = compute_solution_style_penalty(completion, CODE)
         assert penalty == 0.0
         assert reasons == []

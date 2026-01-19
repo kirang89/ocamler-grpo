@@ -40,11 +40,8 @@ from rlvr.reward import (
 # Constants
 # ============================================================================
 
-# Regex for <code>...</code> XML tags (primary format)
+# Regex for <code>...</code> XML tags
 CODE_TAG_RE = re.compile(r"<code>(.*?)</code>", re.DOTALL)
-# Regex for markdown code blocks (legacy format, kept for backwards compatibility)
-CODE_BLOCK_RE = re.compile(r"```(.*?)```", re.DOTALL)
-LANGUAGE_HINTS = {"ocaml", "ml", "language:ocaml"}
 DEGENERATE_PENALTY_MULTIPLIER = 0.3
 
 # Pattern to extract function signature from prompt
@@ -127,41 +124,24 @@ def transform_tests_for_partial_credit(tests: str) -> str:
 
 def extract_code_block(text: str) -> str:
     """
-    Extract code from <code> tags or markdown fences.
+    Extract code from <code> tags.
 
-    Checks for <code>...</code> tags first (primary format), then falls back
-    to markdown code blocks with optional language hints (ocaml, ml, etc.).
-    If no code blocks found, returns the text as-is.
+    If no code tags found, returns the text as-is.
 
     Args:
-        text: Raw completion text, potentially with <code> tags or markdown fences
+        text: Raw completion text, potentially with <code> tags
 
     Returns:
         Extracted OCaml code without formatting
     """
     stripped = text.strip()
 
-    # First try <code>...</code> tags (primary format)
     code_tag_matches = CODE_TAG_RE.findall(stripped)
     if code_tag_matches:
         for block in code_tag_matches:
             block = block.strip()
             if block:
                 return block
-    # Fall back to markdown code blocks (legacy format)
-    matches = CODE_BLOCK_RE.findall(stripped)
-    if matches:
-        for block in matches:
-            block = block.strip()
-            if not block:
-                continue
-            if "\n" in block:
-                first_line, rest = block.split("\n", 1)
-                if first_line.strip().lower() in LANGUAGE_HINTS:
-                    return rest.strip()
-            if block.lower() in LANGUAGE_HINTS:
-                continue
-            return block.strip()
     return stripped
 
 
@@ -310,9 +290,7 @@ def compute_reward_with_metadata(
     style_penalty = 0.0
     style_reasons = []
     if base_reward == 1.0 and not is_degen:
-        style_penalty, style_reasons = compute_solution_style_penalty(
-            completion, code, CODE_BLOCK_RE
-        )
+        style_penalty, style_reasons = compute_solution_style_penalty(completion, code)
         total_reward = total_reward - style_penalty
 
     # Build reason for reward < 1
@@ -456,7 +434,6 @@ def create_ocaml_env(
 __all__ = [
     # Constants
     "CODE_TAG_RE",
-    "CODE_BLOCK_RE",
     "DEGENERATE_PENALTY_MULTIPLIER",
     # Test transformation
     "transform_tests_for_partial_credit",

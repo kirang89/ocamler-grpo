@@ -340,11 +340,9 @@ def is_degenerate_output(completion: str, code: str) -> tuple[bool, list[str]]:
         if code_purity < 0.5:
             reasons.append("low code ratio")
 
-    # Signal 3: Code block spam (both <code> tags and markdown fences)
+    # Signal 3: Code block spam
     code_tag_count = completion.count("<code>")
-    markdown_block_count = completion.count("```")
-    total_block_count = code_tag_count + markdown_block_count
-    if total_block_count > 4:
+    if code_tag_count > 4:
         reasons.append("code block spam")
 
     # Signal 4: Stub solutions
@@ -378,16 +376,13 @@ def is_degenerate_output(completion: str, code: str) -> tuple[bool, list[str]]:
     return len(reasons) >= 1, reasons
 
 
-def compute_solution_style_penalty(
-    completion: str, code: str, code_block_re: re.Pattern
-) -> tuple[float, list[str]]:
+def compute_solution_style_penalty(completion: str, code: str) -> tuple[float, list[str]]:
     """
     Compute small penalty for verbose but correct solutions.
 
     Args:
         completion: Full completion text
         code: Extracted code block
-        code_block_re: Compiled regex for matching code blocks (legacy, kept for API compat)
 
     Returns:
         Tuple of (penalty: 0.0-0.10, reasons: list of detected issues)
@@ -395,23 +390,17 @@ def compute_solution_style_penalty(
     reasons = []
     penalty = 0.0
 
-    # Check 1: Multiple code blocks (count both <code> tags and markdown fences)
-    code_tag_count = completion.count("<code>")
-    markdown_block_count = len(code_block_re.findall(completion))
-    code_block_count = code_tag_count + markdown_block_count
+    # Check 1: Multiple code blocks
+    code_block_count = completion.count("<code>")
     if code_block_count > 1:
         extra_blocks = code_block_count - 1
         penalty += STYLE_PENALTY_EXTRA_CODE_BLOCK * extra_blocks
         reasons.append(f"{code_block_count} code blocks")
 
     # Check 2: Trailing prose after final code block
-    # Find the last closing tag (either </code> or ```)
     last_code_tag = completion.rfind("</code>")
-    last_fence = completion.rfind("```")
-    last_block_end = max(last_code_tag + 7 if last_code_tag != -1 else -1,
-                         last_fence + 3 if last_fence != -1 else -1)
-    if last_block_end > 0:
-        after_code = completion[last_block_end:].strip()
+    if last_code_tag != -1:
+        after_code = completion[last_code_tag + 7 :].strip()
         if len(after_code) > TRAILING_PROSE_MIN_LENGTH:
             penalty += STYLE_PENALTY_TRAILING_PROSE
             reasons.append("trailing prose")

@@ -168,22 +168,10 @@ SIGNATURE_TEST_CASES = [
 
 class TestCodeExtraction:
     def test_extract_code_tag(self):
-        """Test extraction from <code> tags (primary format)."""
+        """Test extraction from <code> tags."""
         code = "let x = 1"
         assert extract_code_block(f"<code>\n{code}\n</code>") == code
         assert extract_code_block(f"<code>{code}</code>") == code
-
-    def test_extract_code_block_with_language_hint(self):
-        """Test extraction from markdown fences with language hint (legacy format)."""
-        code = "let x = 1"
-        assert extract_code_block(f"```ocaml\n{code}\n```") == code
-        assert extract_code_block(f"```ml\n{code}\n```") == code
-        assert extract_code_block(f"```language:ocaml\n{code}\n```") == code
-
-    def test_extract_code_block_without_hint(self):
-        """Test extraction without language hint (legacy format)."""
-        code = "let x = 1"
-        assert extract_code_block(f"```\n{code}\n```") == code
 
     def test_extract_multiple_code_tags(self):
         """Test handling of multiple code tags (should take first valid)."""
@@ -195,22 +183,8 @@ class TestCodeExtraction:
         text = "<code>let x = 1</code>\n<code>let y = 2</code>"
         assert extract_code_block(text) == "let x = 1"
 
-    def test_extract_multiple_code_blocks(self):
-        """Test handling of multiple markdown blocks (legacy format)."""
-        # Empty block followed by valid block
-        text = "```\n```\n```ocaml\nlet x = 1\n```"
-        assert extract_code_block(text) == "let x = 1"
-
-        # Multiple valid blocks - take first
-        text = "```ocaml\nlet x = 1\n```\n```ocaml\nlet y = 2\n```"
-        assert extract_code_block(text) == "let x = 1"
-
-        # Skip language-only blocks
-        text = "```ocaml```\n```\nlet x = 1\n```"
-        assert extract_code_block(text) == "let x = 1"
-
     def test_extract_fallback_to_raw_text(self):
-        """Test fallback to raw text when no code blocks."""
+        """Test fallback to raw text when no code tags."""
         code = "let x = 1"
         assert extract_code_block(code) == code
 
@@ -219,11 +193,6 @@ class TestCodeExtraction:
         code = "let add x y = x + y"
         text = f"Here's the solution:\n<code>\n{code}\n</code>\n Try it out and let me know"
         assert extract_code_block(text) == code
-
-    def test_code_tag_takes_precedence_over_markdown(self):
-        """Test that <code> tags are preferred over markdown blocks."""
-        text = "<code>let x = 1</code>\n```ocaml\nlet y = 2\n```"
-        assert extract_code_block(text) == "let x = 1"
 
 
 class TestFunctionSignatureExtraction:
@@ -296,7 +265,7 @@ class TestDegenerateDetection:
 
     def test_code_block_spam_detection(self):
         """Test code block spam is detected."""
-        # Multiple code blocks (>4 total <code> tags or ``` fences)
+        # Multiple code tags (>4 total)
         spam = "<code></code>\n<code></code>\n<code></code>\n<code></code>\n<code></code>\nlet x = 1"
         is_deg, reasons = is_degenerate_output(spam, "let x = 1")
         assert is_deg is True
