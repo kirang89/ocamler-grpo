@@ -40,6 +40,9 @@ from rlvr.reward import (
 # Constants
 # ============================================================================
 
+# Regex for <code>...</code> XML tags (primary format)
+CODE_TAG_RE = re.compile(r"<code>(.*?)</code>", re.DOTALL)
+# Regex for markdown code blocks (legacy format, kept for backwards compatibility)
 CODE_BLOCK_RE = re.compile(r"```(.*?)```", re.DOTALL)
 LANGUAGE_HINTS = {"ocaml", "ml", "language:ocaml"}
 DEGENERATE_PENALTY_MULTIPLIER = 0.3
@@ -124,18 +127,29 @@ def transform_tests_for_partial_credit(tests: str) -> str:
 
 def extract_code_block(text: str) -> str:
     """
-    Strip markdown fences so only runnable OCaml reaches the evaluator.
+    Extract code from <code> tags or markdown fences.
 
-    Handles code blocks with optional language hints (ocaml, ml, etc.).
+    Checks for <code>...</code> tags first (primary format), then falls back
+    to markdown code blocks with optional language hints (ocaml, ml, etc.).
     If no code blocks found, returns the text as-is.
 
     Args:
-        text: Raw completion text, potentially with markdown code fences
+        text: Raw completion text, potentially with <code> tags or markdown fences
 
     Returns:
-        Extracted OCaml code without markdown formatting
+        Extracted OCaml code without formatting
     """
-    matches = CODE_BLOCK_RE.findall(text.strip())
+    stripped = text.strip()
+
+    # First try <code>...</code> tags (primary format)
+    code_tag_matches = CODE_TAG_RE.findall(stripped)
+    if code_tag_matches:
+        for block in code_tag_matches:
+            block = block.strip()
+            if block:
+                return block
+    # Fall back to markdown code blocks (legacy format)
+    matches = CODE_BLOCK_RE.findall(stripped)
     if matches:
         for block in matches:
             block = block.strip()
@@ -148,7 +162,7 @@ def extract_code_block(text: str) -> str:
             if block.lower() in LANGUAGE_HINTS:
                 continue
             return block.strip()
-    return text.strip()
+    return stripped
 
 
 def extract_function_signature(prompt: str) -> Tuple[str, str]:
@@ -441,6 +455,7 @@ def create_ocaml_env(
 
 __all__ = [
     # Constants
+    "CODE_TAG_RE",
     "CODE_BLOCK_RE",
     "DEGENERATE_PENALTY_MULTIPLIER",
     # Test transformation

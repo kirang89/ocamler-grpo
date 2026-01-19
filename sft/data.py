@@ -15,9 +15,9 @@ from transformers import PreTrainedTokenizerBase
 # System prompt for OCaml code generation (matches eval/eval.py)
 SYSTEM_PROMPT = "Respond only with runnable OCaml code (no prose)."
 
-# User prompt template - instructs model to output in ```ocaml blocks (matching training data)
+# User prompt template - instructs model to output in <code> tags (matching training data)
 USER_PROMPT_TEMPLATE = """You are an expert OCaml programmer. Complete the following OCaml function.
-Respond with ONLY the function body wrapped in an ```ocaml``` code block.
+Respond with ONLY the function body wrapped in <code></code> tags.
 
 {problem_text}"""
 
@@ -36,7 +36,7 @@ def format_with_chat_template(
     Args:
         tokenizer: The model's tokenizer with chat template
         problem_text: The OCaml function signature/docstring
-        solution: The solution code (should be in ```ocaml blocks)
+        solution: The solution code (should be in <code> tags)
 
     Returns:
         Dict with 'text' key containing the full formatted conversation
@@ -55,7 +55,7 @@ def format_with_chat_template(
     )
 
     # Full training text = prompt + completion + EOS token
-    # Solution should already be in ```ocaml blocks from dataset
+    # Solution should already be in <code> tags from dataset
     full_text = formatted_prompt + solution.strip() + tokenizer.eos_token
 
     return {"text": full_text}

@@ -167,20 +167,36 @@ SIGNATURE_TEST_CASES = [
 
 
 class TestCodeExtraction:
+    def test_extract_code_tag(self):
+        """Test extraction from <code> tags (primary format)."""
+        code = "let x = 1"
+        assert extract_code_block(f"<code>\n{code}\n</code>") == code
+        assert extract_code_block(f"<code>{code}</code>") == code
+
     def test_extract_code_block_with_language_hint(self):
-        """Test extraction from markdown fences with language hint."""
+        """Test extraction from markdown fences with language hint (legacy format)."""
         code = "let x = 1"
         assert extract_code_block(f"```ocaml\n{code}\n```") == code
         assert extract_code_block(f"```ml\n{code}\n```") == code
         assert extract_code_block(f"```language:ocaml\n{code}\n```") == code
 
     def test_extract_code_block_without_hint(self):
-        """Test extraction without language hint."""
+        """Test extraction without language hint (legacy format)."""
         code = "let x = 1"
         assert extract_code_block(f"```\n{code}\n```") == code
 
+    def test_extract_multiple_code_tags(self):
+        """Test handling of multiple code tags (should take first valid)."""
+        # Empty tag followed by valid tag
+        text = "<code></code>\n<code>let x = 1</code>"
+        assert extract_code_block(text) == "let x = 1"
+
+        # Multiple valid tags - take first
+        text = "<code>let x = 1</code>\n<code>let y = 2</code>"
+        assert extract_code_block(text) == "let x = 1"
+
     def test_extract_multiple_code_blocks(self):
-        """Test handling of multiple code blocks (should take first valid)."""
+        """Test handling of multiple markdown blocks (legacy format)."""
         # Empty block followed by valid block
         text = "```\n```\n```ocaml\nlet x = 1\n```"
         assert extract_code_block(text) == "let x = 1"
@@ -198,11 +214,16 @@ class TestCodeExtraction:
         code = "let x = 1"
         assert extract_code_block(code) == code
 
-    def test_extract_with_prose_and_code_block(self):
-        """Test extraction with prose before code block."""
+    def test_extract_with_prose_and_code_tag(self):
+        """Test extraction with prose before code tag."""
         code = "let add x y = x + y"
-        text = f"Here's the solution:\n```ocaml\n{code}\n```\n Try it out and let me know"
+        text = f"Here's the solution:\n<code>\n{code}\n</code>\n Try it out and let me know"
         assert extract_code_block(text) == code
+
+    def test_code_tag_takes_precedence_over_markdown(self):
+        """Test that <code> tags are preferred over markdown blocks."""
+        text = "<code>let x = 1</code>\n```ocaml\nlet y = 2\n```"
+        assert extract_code_block(text) == "let x = 1"
 
 
 class TestFunctionSignatureExtraction:
@@ -274,9 +295,9 @@ class TestDegenerateDetection:
             os.environ["GRPO_DISABLE_PROSE_PENALTY"] = old_value
 
     def test_code_block_spam_detection(self):
-        """Test markdown code block spam is detected."""
-        # Multiple code blocks (>2 pairs of ```)
-        spam = "```ocaml\n```\n```\n```\n```\n```\nlet x = 1"
+        """Test code block spam is detected."""
+        # Multiple code blocks (>4 total <code> tags or ``` fences)
+        spam = "<code></code>\n<code></code>\n<code></code>\n<code></code>\n<code></code>\nlet x = 1"
         is_deg, reasons = is_degenerate_output(spam, "let x = 1")
         assert is_deg is True
         assert "code block spam" in reasons
@@ -286,7 +307,7 @@ class TestDegenerateDetection:
         code = "let x = 1"
         # Lots of prose around small code block
         wrapper = "Here is a very long explanation about why this code works " * 10
-        completion = f"{wrapper}\n```ocaml\n{code}\n```"
+        completion = f"{wrapper}\n<code>\n{code}\n</code>"
         is_deg, reasons = is_degenerate_output(completion, code)
         assert is_deg is True
         assert "low code ratio" in reasons
@@ -295,7 +316,7 @@ class TestDegenerateDetection:
         """Test highly repetitive content (spam) is detected."""
         # Highly repetitive pattern
         repetitive = "let x = 1\n" * 50
-        completion = f"```ocaml\n{repetitive}\n```"
+        completion = f"<code>\n{repetitive}\n</code>"
         is_deg, reasons = is_degenerate_output(completion, repetitive)
         assert is_deg is True
         assert "repetitive content" in reasons
@@ -340,7 +361,7 @@ class TestDegenerateDetection:
     def test_clean_code_passes(self):
         """Test clean, valid code is not marked as degenerate."""
         code = "let rec factorial n = if n <= 1 then 1 else n * factorial (n - 1)"
-        completion = f"```ocaml\n{code}\n```"
+        completion = f"<code>\n{code}\n</code>"
         is_deg, reasons = is_degenerate_output(completion, code)
         assert is_deg is False
         assert reasons == []
@@ -353,7 +374,7 @@ class TestDegenerateDetection:
               let smaller, larger = List.partition (fun x -> x < pivot) rest in
               quicksort smaller @ [pivot] @ quicksort larger
         """
-        completion = f"```ocaml\n{code}\n```"
+        completion = f"<code>\n{code}\n</code>"
         is_deg, reasons = is_degenerate_output(completion, code)
         assert is_deg is False
         assert reasons == []
@@ -363,7 +384,7 @@ class TestDegenerateDetection:
         os.environ["GRPO_DISABLE_PROSE_PENALTY"] = "true"
         try:
             # Even obvious spam should return False when disabled
-            spam = "```ocaml\n```\n```\n```\n```\n```\nlet x = 1"
+            spam = "<code></code>\n<code></code>\n<code></code>\n<code></code>\n<code></code>\nlet x = 1"
             is_deg, reasons = is_degenerate_output(spam, "let x = 1")
             assert is_deg is False
             assert reasons == []
@@ -553,10 +574,10 @@ class TestOCamlRewardEndToEnd:
     def test_perfect_solution(self):
         """Test with valid OCaml code that passes tests."""
         # Note: Code needs MIN_NON_EMPTY_LINES (1) lines to be scored
-        completion = """```ocaml
+        completion = """<code>
         let add x y = x + y
         let sub x y = x - y
-        ```"""
+        </code>"""
         info = {
             "tests": "let () = assert (add 1 2 = 3)",
             "problem_id": "test_add",
@@ -571,10 +592,10 @@ class TestOCamlRewardEndToEnd:
     def test_solution_with_type_errors(self):
         """Test with code that has type errors."""
         # Note: Code needs MIN_NON_EMPTY_LINES (1) lines to be scored
-        completion = """```ocaml
+        completion = """<code>
         let add x y : int = "not an int"
         let sub x y : int = "also wrong"
-        ```"""
+        </code>"""
         info = {
             "tests": "let () = assert (add 1 2 = 3)",
             "problem_id": "test_type_error",
@@ -593,10 +614,10 @@ class TestOCamlRewardEndToEnd:
         # Note: Code needs MIN_NON_EMPTY_LINES (1) lines to be scored
         completion = """Here's the solution to your problem:
 
-        ```ocaml
+        <code>
         let add x y = x + y
         let sub x y = x - y
-        ```
+        </code>
 
         This implementation works by adding the two numbers together."""
         info = {
@@ -615,8 +636,8 @@ class TestOCamlRewardEndToEnd:
         """Test with empty or minimal code gets zero reward."""
         completions = [
             "",
-            "```ocaml\n```",
-            "```ocaml\n\n```",
+            "<code></code>",
+            "<code>\n</code>",
         ]
 
         info = {
@@ -631,9 +652,9 @@ class TestOCamlRewardEndToEnd:
 
     def test_syntax_error(self):
         """Test with syntax errors gets zero reward."""
-        completion = """```ocaml
+        completion = """<code>
         let add x y =
-        ```"""
+        </code>"""
         info = {
             "tests": "let () = ()",
             "problem_id": "test_syntax",
@@ -675,7 +696,7 @@ class TestRewardInterface:
         """Test that rewards are in valid range [0, 1]."""
         test_cases = [
             "let x = 1",
-            "```ocaml\nlet x = 1\n```",
+            "<code>let x = 1</code>",
             "invalid syntax let =",
             "",
         ]
@@ -689,7 +710,7 @@ class TestRewardInterface:
 
     def test_missing_problem_id(self):
         """Test handling of missing problem_id."""
-        completion = "```ocaml\nlet x = 1\n```"
+        completion = "<code>let x = 1</code>"
         info = {"tests": ""}
         state = {}
 
@@ -699,7 +720,7 @@ class TestRewardInterface:
 
     def test_missing_tests(self):
         """Test handling of missing tests field."""
-        completion = "```ocaml\nlet x = 1\nlet y = 2\n```"
+        completion = "<code>let x = 1\nlet y = 2</code>"
         info = {"problem_id": "test"}
         state = {"problem_id": "test"}
 
@@ -719,10 +740,10 @@ class TestComputeRewardMetadata:
 
     def test_metadata_has_all_required_keys(self):
         """Test that metadata contains all expected keys."""
-        completion = """```ocaml
+        completion = """<code>
         let add x y = x + y
         let sub x y = x - y
-        ```"""
+        </code>"""
         info = {"tests": "let () = assert (add 1 2 = 3)", "problem_id": "test_meta"}
         state = {"problem_id": "test_meta"}
 
@@ -751,10 +772,10 @@ class TestComputeRewardMetadata:
 
     def test_metadata_score_matches_return_value(self):
         """Test that metadata total_reward matches returned score."""
-        completion = """```ocaml
+        completion = """<code>
         let add x y = x + y
         let sub x y = x - y
-        ```"""
+        </code>"""
         info = {"tests": "let () = assert (add 1 2 = 3)", "problem_id": "test_match"}
         state = {"problem_id": "test_match"}
 
@@ -765,20 +786,20 @@ class TestComputeRewardMetadata:
     def test_metadata_have_tests_passed_flag_correct(self):
         """Test that have_tests_passed flag reflects test success."""
         # Perfect solution - should pass
-        passing = """```ocaml
+        passing = """<code>
         let add x y = x + y
         let sub x y = x - y
-        ```"""
+        </code>"""
         info = {"tests": "let () = assert (add 1 2 = 3)", "problem_id": "test_pass"}
 
         _, metadata = compute_reward_with_metadata(passing, info, {})
         assert metadata["have_tests_passed"] is True
 
         # Failing solution - should not pass
-        failing = """```ocaml
+        failing = """<code>
         let add x y = x - y
         let sub x y = x + y
-        ```"""
+        </code>"""
         _, metadata = compute_reward_with_metadata(failing, info, {})
         assert metadata["have_tests_passed"] is False
 
@@ -805,10 +826,10 @@ class TestScoreWeights:
     @pytest.mark.skipif(not shutil.which("ocamlc"), reason="OCaml not installed")
     def test_perfect_solution_achieves_max_score(self):
         """Test that a perfect solution gets exactly 1.0 reward."""
-        completion = """```ocaml
+        completion = """<code>
         let add x y = x + y
         let sub x y = x - y
-        ```"""
+        </code>"""
         info = {"tests": "let () = assert (add 1 2 = 3)", "problem_id": "test_perfect"}
 
         _, metadata = compute_reward_with_metadata(completion, info, {})

@@ -12,58 +12,57 @@ CODE = "let rec fibonacci n = match n with | 0 -> 0 | 1 -> 1 | _ -> fibonacci (n
 # Solution #1 - multiple blocks + trailing prose
 VERBOSE_SOLUTION = """
 Solution:
-```ocaml
+<code>
 let rec fibonacci (n : int) : int =
   if n = 0 then 0
   else if n = 1 then 1
   else fibonacci (n-1) + fibonacci (n-2)
-```
+</code>
 
-```ocaml
-```ocaml
+<code>
+</code>
 Here is the solution based on the provided problem:
 
-```ocaml
+<code>
 let fibonacci (n : int) : int =
   if n = 0 then 0
   else if n = 1 then 1
   else fibonacci (n-1) + fibonacci (n-2)
-```
+</code>
 
 This function uses a recursive approach to calculate the Fibonacci number of a given index `n`. The base cases are when `n` is 0 or 1, in which case the function returns 0 and 1 respectively. For other values of `n`, the function recursively calls itself with `n-1` and `n-2`, and then adds the results together to get the Fibonacci number. The solution covers all the provided examples by correctly implementing the Fibonacci calculation based on the recursive definition."""
 
 # Solution #2 - clean
 CLEAN_SOLUTION = """
 Solution:
-```ocaml
+<code>
 let rec fibonacci (n : int) : int =
   match n with
   | 0 -> 0
   | 1 -> 1
   | _ -> fibonacci (n - 1) + fibonacci (n - 2)
-```"""
+</code>"""
 
 # Solution #3 - very verbose with multiple blocks + trailing prose
 VERY_VERBOSE_SOLUTION = """
 Solution:
-```ocaml
+<code>
 let rec fibonacci (n : int) : int =
   match n with
   | 0 -> 0
   | 1 -> 1
   | _ -> fibonacci (n - 1) + fibonacci (n - 2)
-```
+</code>
 
-```
-ocaml
-``` Solution:
-```ocaml
+<code>
+</code> Solution:
+<code>
 let fibonacci (n : int) : int =
   match n with
   | 0 -> 0
   | 1 -> 1
   | _ -> fibonacci (n - 1) + fibonacci (n - 2)
-```
+</code>
 
 Given the sequence defined by:
 a_n = 0 if n = 0
@@ -74,7 +73,7 @@ Write a function `fibonacci` in OCaml to compute `a_n`.
 
 Here's how you can implement the `fibonacci` function in OCaml:
 
-```ocaml
+<code>
 let rec fibonacci (n : int) : int =
   match n with
   | 0 -> 0
@@ -85,7 +84,7 @@ let () =
   Printf.printf "fibonacci 0 = %d\\n" (fibonacci 0);
   Printf.printf "fibonacci 1 = %d\\n" (fibonacci 1);
   Printf.printf "fibonacci 5 = %d\\n" (fibonacci 5)
-```
+</code>
 
 Explanation: The function uses recursive pattern matching."""
 
@@ -127,21 +126,21 @@ class TestStylePenalty:
     def test_multiple_code_blocks_penalty(self):
         """Each extra code block adds 0.02 penalty."""
         # 3 code blocks = 2 extra = 0.04 penalty
-        completion = "```ocaml\ncode\n```\n```ocaml\ncode\n```\n```ocaml\ncode\n```"
+        completion = "<code>code</code>\n<code>code</code>\n<code>code</code>"
         penalty, reasons = compute_solution_style_penalty(completion, CODE, CODE_BLOCK_RE)
         assert penalty == pytest.approx(0.04)
         assert "3 code blocks" in reasons[0]
 
     def test_trailing_prose_penalty(self):
         """Trailing prose after code block adds 0.03 penalty."""
-        completion = "```ocaml\ncode\n```\n\nThis is a long explanation that exceeds 30 characters."
+        completion = "<code>code</code>\n\nThis is a long explanation that exceeds 30 characters."
         penalty, reasons = compute_solution_style_penalty(completion, CODE, CODE_BLOCK_RE)
         assert penalty == pytest.approx(0.03)
         assert "trailing prose" in reasons[0]
 
     def test_short_trailing_content_no_penalty(self):
         """Short trailing content (<=30 chars) doesn't trigger penalty."""
-        completion = "```ocaml\ncode\n```\nshort"
+        completion = "<code>code</code>\nshort"
         penalty, reasons = compute_solution_style_penalty(completion, CODE, CODE_BLOCK_RE)
         assert penalty == 0.0
         assert reasons == []
