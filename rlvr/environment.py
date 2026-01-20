@@ -283,14 +283,17 @@ def compute_reward_with_metadata(
     base_reward = type_check_result.score + compile_result.score + test_result.score
 
     # Apply degenerate output penalty
-    is_degen, degen_reasons = is_degenerate_output(completion, code)
+    # Use raw completion (before prepend_signature) for code purity calculation
+    # to avoid penalizing body-only outputs that follow prompt instructions
+    raw_completion = info.get("raw_completion", completion)
+    is_degen, degen_reasons = is_degenerate_output(raw_completion, code)
     total_reward = base_reward * DEGENERATE_PENALTY_MULTIPLIER if is_degen else base_reward
 
     # Apply style penalty for passing solutions
     style_penalty = 0.0
     style_reasons = []
     if base_reward == 1.0 and not is_degen:
-        style_penalty, style_reasons = compute_solution_style_penalty(completion, code)
+        style_penalty, style_reasons = compute_solution_style_penalty(raw_completion, code)
         total_reward = total_reward - style_penalty
 
     # Build reason for reward < 1
