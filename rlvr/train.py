@@ -62,8 +62,8 @@ def _score_single(args: tuple) -> Dict[str, Any]:
 
     Defined at module level to be picklable for ProcessPoolExecutor.
     """
-    pid, completion, tests = args
-    info = {"tests": tests, "problem_id": pid}
+    pid, completion, tests, raw_completion = args
+    info = {"tests": tests, "problem_id": pid, "raw_completion": raw_completion}
     _, metadata = compute_reward_with_metadata(completion, info, {})
     return metadata
 
@@ -118,6 +118,7 @@ def create_reward_function(
                 ids[idx] if idx < len(ids) else f"sample_{idx}",
                 full_completions[idx],
                 tests_list[idx] if idx < len(tests_list) else "",
+                completions[idx],  # raw completion for degenerate detection
             )
             for idx in range(len(full_completions))
         ]

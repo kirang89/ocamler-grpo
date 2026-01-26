@@ -40,8 +40,8 @@ from rlvr.reward import (
 # Constants
 # ============================================================================
 
-CODE_BLOCK_RE = re.compile(r"```(.*?)```", re.DOTALL)
-LANGUAGE_HINTS = {"ocaml", "ml", "language:ocaml"}
+# Regex for <code>...</code> XML tags
+CODE_TAG_RE = re.compile(r"<code>(.*?)</code>", re.DOTALL)
 DEGENERATE_PENALTY_MULTIPLIER = 0.3
 
 # Pattern to extract function signature from prompt
@@ -124,31 +124,25 @@ def transform_tests_for_partial_credit(tests: str) -> str:
 
 def extract_code_block(text: str) -> str:
     """
-    Strip markdown fences so only runnable OCaml reaches the evaluator.
+    Extract code from <code> tags.
 
-    Handles code blocks with optional language hints (ocaml, ml, etc.).
-    If no code blocks found, returns the text as-is.
+    If no code tags found, returns the text as-is.
 
     Args:
-        text: Raw completion text, potentially with markdown code fences
+        text: Raw completion text, potentially with <code> tags
 
     Returns:
-        Extracted OCaml code without markdown formatting
+        Extracted OCaml code without formatting
     """
-    matches = CODE_BLOCK_RE.findall(text.strip())
-    if matches:
-        for block in matches:
+    stripped = text.strip()
+
+    code_tag_matches = CODE_TAG_RE.findall(stripped)
+    if code_tag_matches:
+        for block in code_tag_matches:
             block = block.strip()
-            if not block:
-                continue
-            if "\n" in block:
-                first_line, rest = block.split("\n", 1)
-                if first_line.strip().lower() in LANGUAGE_HINTS:
-                    return rest.strip()
-            if block.lower() in LANGUAGE_HINTS:
-                continue
-            return block.strip()
-    return text.strip()
+            if block:
+                return block
+    return stripped
 
 
 def extract_function_signature(prompt: str) -> Tuple[str, str]:
@@ -289,16 +283,17 @@ def compute_reward_with_metadata(
     base_reward = type_check_result.score + compile_result.score + test_result.score
 
     # Apply degenerate output penalty
-    is_degen, degen_reasons = is_degenerate_output(completion, code)
+    # Use raw completion (before prepend_signature) for code purity calculation
+    # to avoid penalizing body-only outputs that follow prompt instructions
+    raw_completion = info.get("raw_completion", completion)
+    is_degen, degen_reasons = is_degenerate_output(raw_completion, code)
     total_reward = base_reward * DEGENERATE_PENALTY_MULTIPLIER if is_degen else base_reward
 
     # Apply style penalty for passing solutions
     style_penalty = 0.0
     style_reasons = []
     if base_reward == 1.0 and not is_degen:
-        style_penalty, style_reasons = compute_solution_style_penalty(
-            completion, code, CODE_BLOCK_RE
-        )
+        style_penalty, style_reasons = compute_solution_style_penalty(raw_completion, code)
         total_reward = total_reward - style_penalty
 
     # Build reason for reward < 1
@@ -441,7 +436,7 @@ def create_ocaml_env(
 
 __all__ = [
     # Constants
-    "CODE_BLOCK_RE",
+    "CODE_TAG_RE",
     "DEGENERATE_PENALTY_MULTIPLIER",
     # Test transformation
     "transform_tests_for_partial_credit",

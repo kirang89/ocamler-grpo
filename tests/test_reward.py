@@ -101,12 +101,12 @@ class TestDegenerateDetection:
         """Degenerate output (prose + code block) gets DEGENERATE_PENALTY_MULTIPLIER penalty."""
         reward_fn = create_reward_function(logger=None, parallel=False)
 
-        # Degenerate with markdown and prose (full function in code block)
+        # Degenerate with code tags and prose (full function in code block)
         degenerate = """Here's the solution:
-        ```ocaml
+        <code>
         let rec factorial (n : int) : int =
         if n <= 1 then 1 else n * factorial (n - 1)
-        ```
+        </code>
         This uses recursion."""
 
         rewards_degenerate = reward_fn(

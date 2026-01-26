@@ -19,11 +19,11 @@ PROMPT_TEMPLATE = textwrap.dedent(
     """
     You are an expert OCaml engineer. Complete the function body below by following this EXACT format:
 
-    1. Start with ```ocaml
+    1. Start with <code>
     2. Write ONLY the function body (the code that comes after the = sign)
-    3. End with ```
+    3. End with </code>
     4. Do NOT repeat the function signature - it is already provided
-    5. Do NOT explain the code or include ANY text before or after the code fence
+    5. Do NOT explain the code or include ANY text before or after the code tags
 
     Examples (for instruction only — do NOT copy these into your answer):
 
@@ -34,9 +34,9 @@ PROMPT_TEMPLATE = textwrap.dedent(
     *)
     let filter_positive (numbers : int list) : int list =
     Solution:
-    ```ocaml
+    <code>
     List.filter (fun x -> x > 0) numbers
-    ```
+    </code>
 
     Problem:
     (**Count occurrences of a character in a string
@@ -45,9 +45,9 @@ PROMPT_TEMPLATE = textwrap.dedent(
     *)
     let count_char (s : string) (c : char) : int =
     Solution:
-    ```ocaml
+    <code>
     String.fold_left (fun acc ch -> if ch = c then acc + 1 else acc) 0 s
-    ```
+    </code>
 
     Problem:
     (**Calculate the sum of all elements in a list
@@ -56,11 +56,11 @@ PROMPT_TEMPLATE = textwrap.dedent(
     *)
     let rec sum_list (lst : int list) : int =
     Solution:
-    ```ocaml
+    <code>
     match lst with
     | [] -> 0
     | head :: tail -> head + sum_list tail
-    ```
+    </code>
 
     Now solve this problem and complete the provided function:
 
